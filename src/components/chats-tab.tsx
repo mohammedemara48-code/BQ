@@ -130,7 +130,9 @@ function ChatRow({
           ? "صوتية"
           : c.lastType === "file"
             ? "ملف"
-            : c.lastText || "رسالة";
+            : c.lastType === "call"
+              ? c.lastText || "مكالمة"
+              : c.lastText || "رسالة";
   return (
     <li>
       <div className="flex items-center gap-2 px-2 py-2">

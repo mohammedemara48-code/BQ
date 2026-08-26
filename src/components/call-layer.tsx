@@ -11,16 +11,28 @@ import {
   VolumeX,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Avatar } from "@/components/avatar";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { callDurationSec, useCallStore } from "@/lib/bq/call-store";
 import { MediaCall } from "@/lib/bq/webrtc-call";
-import { findPerson, useBqMutations, useCallSession, useIncomingCall, useMe, usePeople } from "@/lib/bq/hooks";
+import {
+  findPerson,
+  useBqMutations,
+  useCallSession,
+  useIncomingCall,
+  useMe,
+  usePeople,
+} from "@/lib/bq/hooks";
 import { cn, formatDuration } from "@/lib/utils";
+
+/** Survives CallLayer remounts so a just-ended call never rings again. */
+const endedCallIds = new Set<number>();
 
 export function CallLayer() {
   const { user } = useCurrentUserState();
+  const qc = useQueryClient();
   const call = useCallStore();
   const incoming = useIncomingCall(Boolean(user) && !call.active);
   const session = useCallSession(call.callId);
@@ -36,16 +48,19 @@ export function CallLayer() {
   const remoteRef = useRef<HTMLVideoElement>(null);
   const pipLocalRef = useRef<HTMLVideoElement>(null);
   const remoteAudioRef = useRef<HTMLAudioElement>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
   const rtcRef = useRef<MediaCall | null>(null);
   const seenSignals = useRef(0);
   const offered = useRef(false);
   const closing = useRef(false);
-  const endedIds = useRef(new Set<number>());
+  const signalChain = useRef(Promise.resolve());
   const sendRef = useRef(sendSignal.mutateAsync);
   sendRef.current = sendSignal.mutateAsync;
   const hangRef = useRef(hangLive.mutateAsync);
   hangRef.current = hangLive.mutateAsync;
-  const mediaOn = Boolean(call.active && call.callId && (call.role === "out" || call.phase === "live"));
+  const mediaOn = Boolean(
+    call.active && call.callId && (call.role === "out" || call.phase === "live"),
+  );
 
   const name = person?.name || call.peerName || "شخص";
   const photo = person?.photoUrl || call.peerPhoto;
@@ -53,7 +68,7 @@ export function CallLayer() {
   useEffect(() => {
     const row = incoming.data;
     if (!row || call.active) return;
-    if (endedIds.current.has(row.id)) return;
+    if (endedCallIds.has(row.id)) return;
     useCallStore.getState().incoming({
       callId: row.id,
       peerId: row.callerId,
@@ -72,15 +87,21 @@ export function CallLayer() {
     if (row.status === "declined" || row.status === "missed" || row.status === "ended") {
       if (closing.current) return;
       closing.current = true;
-      endedIds.current.add(row.id);
+      endedCallIds.add(row.id);
       rtcRef.current?.close();
       rtcRef.current = null;
+      localStreamRef.current = null;
       useCallStore.getState().hang();
+      void qc.setQueryData(["incoming-call"], null);
+      void qc.invalidateQueries({ queryKey: ["messages"] });
+      void qc.invalidateQueries({ queryKey: ["chats"] });
+      void qc.invalidateQueries({ queryKey: ["calls"] });
+      void qc.invalidateQueries({ queryKey: ["incoming-call"] });
       if (row.status === "declined") toast.error("تم رفض المكالمة");
       else if (row.status === "missed" && call.role === "out") toast.error("لا رد");
       closing.current = false;
     }
-  }, [session.data?.call?.status, call.active, call.phase, call.role]);
+  }, [session.data?.call?.status, call.active, call.phase, call.role, qc]);
 
   useEffect(() => {
     if (!call.active || call.phase !== "live") {
@@ -99,54 +120,73 @@ export function CallLayer() {
     rtcRef.current = media;
     offered.current = false;
     seenSignals.current = 0;
+    signalChain.current = Promise.resolve();
     setLinked(false);
     setRtcReady(false);
-    media.onLocalStream = (stream) => {
-      const apply = (el: HTMLVideoElement | null) => {
-        if (!el) return;
+
+    const attachLocal = (stream: MediaStream) => {
+      localStreamRef.current = stream;
+      for (const el of [localRef.current, pipLocalRef.current]) {
+        if (!el) continue;
         el.srcObject = stream;
         el.muted = true;
-        void el.play();
-      };
-      apply(localRef.current);
-      apply(pipLocalRef.current);
+        void el.play().catch(() => undefined);
+      }
     };
-    media.onRemoteStream = (stream) => {
+    const attachRemote = (stream: MediaStream) => {
       setLinked(true);
       if (remoteRef.current) {
         remoteRef.current.srcObject = stream;
-        remoteRef.current.muted = !useCallStore.getState().speaker;
-        void remoteRef.current.play();
+        remoteRef.current.muted = true;
+        void remoteRef.current
+          .play()
+          .then(() => {
+            if (remoteRef.current) {
+              remoteRef.current.muted = !useCallStore.getState().speaker;
+            }
+          })
+          .catch(() => undefined);
       }
       if (remoteAudioRef.current) {
         remoteAudioRef.current.srcObject = stream;
         remoteAudioRef.current.muted = !useCallStore.getState().speaker;
-        void remoteAudioRef.current.play();
+        void remoteAudioRef.current.play().catch(() => undefined);
       }
     };
+
+    media.onLocalStream = attachLocal;
+    media.onRemoteStream = attachRemote;
     media.onSignal = (kind, payload) => {
       const id = useCallStore.getState().callId;
       if (!id) return;
       void sendRef.current({ callId: id, kind, payload: JSON.stringify(payload) });
     };
+
     void media
       .open(call.kind === "video")
       .then(() => {
+        if (rtcRef.current !== media) return;
         media.setMuted(useCallStore.getState().muted);
         media.setCamOff(useCallStore.getState().camOff);
-        if (useCallStore.getState().role === "out" && !offered.current) {
-          offered.current = true;
-          return media.offer();
-        }
-        return undefined;
+        setRtcReady(true);
       })
-      .then(() => setRtcReady(true))
       .catch(() => setCamError("اسمح للميكروفون والكاميرا من الإعدادات"));
+
     return () => {
       media.close();
       if (rtcRef.current === media) rtcRef.current = null;
+      localStreamRef.current = null;
     };
   }, [mediaOn, call.kind]);
+
+  // Caller creates offer only after both sides are live
+  useEffect(() => {
+    if (!rtcReady || !mediaOn) return;
+    if (call.role !== "out" || call.phase !== "live") return;
+    if (offered.current) return;
+    offered.current = true;
+    void rtcRef.current?.offer();
+  }, [rtcReady, mediaOn, call.role, call.phase]);
 
   useEffect(() => {
     rtcRef.current?.setMuted(call.muted);
@@ -162,6 +202,35 @@ export function CallLayer() {
     if (remoteAudioRef.current) remoteAudioRef.current.muted = mute;
   }, [call.speaker]);
 
+  // Re-attach streams after minimize/expand
+  useEffect(() => {
+    const media = rtcRef.current;
+    if (!media || !call.active) return;
+    const remote = media.remoteStream;
+    if (remote && remoteRef.current) {
+      remoteRef.current.srcObject = remote;
+      remoteRef.current.muted = !call.speaker;
+      void remoteRef.current.play().catch(() => undefined);
+    }
+    if (remote && remoteAudioRef.current) {
+      remoteAudioRef.current.srcObject = remote;
+      remoteAudioRef.current.muted = !call.speaker;
+      void remoteAudioRef.current.play().catch(() => undefined);
+    }
+    const local = localStreamRef.current;
+    if (local) {
+      for (const el of [localRef.current, pipLocalRef.current]) {
+        if (!el) continue;
+        if (el.srcObject !== local) {
+          el.srcObject = local;
+          el.muted = true;
+          void el.play().catch(() => undefined);
+        }
+      }
+    }
+  }, [call.minimized, call.active, call.speaker, linked]);
+
+  // Process signals sequentially to keep SDP/ICE order
   useEffect(() => {
     const media = rtcRef.current;
     const signals = session.data?.signals;
@@ -173,15 +242,19 @@ export function CallLayer() {
         seenSignals.current = s.id;
         continue;
       }
+      const id = s.id;
+      const kind = s.kind;
       let payload: unknown = s.payload;
       try {
         payload = JSON.parse(s.payload) as unknown;
       } catch {
-        seenSignals.current = s.id;
+        seenSignals.current = id;
         continue;
       }
-      void media.handle(s.kind, payload);
-      seenSignals.current = s.id;
+      seenSignals.current = id;
+      signalChain.current = signalChain.current
+        .then(() => media.handle(kind, payload))
+        .catch(() => undefined);
     }
   }, [session.data?.signals, me.data?.userId, rtcReady]);
 
@@ -190,25 +263,38 @@ export function CallLayer() {
     const t = window.setTimeout(() => {
       const cur = useCallStore.getState();
       if (!cur.active || cur.phase !== "ring" || !cur.callId) return;
-      endedIds.current.add(cur.callId);
-      void hangRef.current({ callId: cur.callId, reason: "hang" });
-      rtcRef.current?.close();
-      rtcRef.current = null;
-      cur.hang();
-      toast.error("لا رد");
+      void finishAsync(cur.callId, "hang", true);
     }, 45_000);
     return () => window.clearTimeout(t);
   }, [call.active, call.role, call.phase, call.callId]);
 
-  function finish(reason: "hang" | "decline") {
-    const id = call.callId;
+  async function finishAsync(id: number | null, reason: "hang" | "decline", timedOut = false) {
+    if (closing.current) return;
     closing.current = true;
-    if (id) endedIds.current.add(id);
+    if (id) endedCallIds.add(id);
     rtcRef.current?.close();
     rtcRef.current = null;
-    call.hang();
-    if (id) void hangRef.current({ callId: id, reason });
+    localStreamRef.current = null;
+    if (id) {
+      try {
+        await hangRef.current({ callId: id, reason });
+      } catch {
+        /* still close UI */
+      }
+    }
+    useCallStore.getState().hang();
+    void qc.setQueryData(["incoming-call"], null);
+    void qc.invalidateQueries({ queryKey: ["messages"] });
+    void qc.invalidateQueries({ queryKey: ["chats"] });
+    void qc.invalidateQueries({ queryKey: ["calls"] });
+    void qc.invalidateQueries({ queryKey: ["incoming-call"] });
+    void qc.invalidateQueries({ queryKey: ["call-session"] });
+    if (timedOut) toast.error("لا رد");
     closing.current = false;
+  }
+
+  function finish(reason: "hang" | "decline") {
+    void finishAsync(call.callId, reason);
   }
 
   async function accept() {
@@ -232,8 +318,6 @@ export function CallLayer() {
       : call.kind === "video"
         ? "جاري الاتصال فيديو…"
         : "جاري الاتصال…";
-
-  const showRemote = Boolean(remoteRef.current?.srcObject) || linked;
 
   if (call.minimized) {
     return (
@@ -275,16 +359,19 @@ export function CallLayer() {
 
   return (
     <div className="fixed inset-0 z-40 mx-auto flex min-h-dvh w-full max-w-lg flex-col items-center justify-between overflow-hidden bg-bg px-6 py-10">
-      <audio ref={remoteAudioRef} autoPlay />
+      <audio ref={remoteAudioRef} autoPlay playsInline />
       {call.kind === "video" ? (
         <>
           <video
             ref={remoteRef}
             playsInline
             autoPlay
-            className={cn("absolute inset-0 size-full object-cover", showRemote ? "opacity-100" : "opacity-0")}
+            className={cn(
+              "absolute inset-0 size-full object-cover",
+              linked ? "opacity-100" : "opacity-0",
+            )}
           />
-          {photo && !showRemote ? (
+          {photo && !linked ? (
             <img
               src={photo}
               alt=""
@@ -306,7 +393,7 @@ export function CallLayer() {
           className="pointer-events-none absolute inset-0 size-full object-cover object-center opacity-25 blur-2xl"
         />
       ) : null}
-      <div className="absolute inset-0 bg-bg/40" />
+      <div className="absolute inset-0 bg-bg/30" />
       <div className="relative z-10 flex w-full items-center justify-between">
         <button
           type="button"
@@ -318,22 +405,28 @@ export function CallLayer() {
         </button>
         <p className="text-xs text-muted">
           {call.kind === "video" ? "مكالمة فيديو" : "مكالمة صوت"}
-          {call.phase === "live" && linked ? " · متصل" : ""}
+          {call.phase === "live" ? (linked ? " · متصل" : " · جاري الربط…") : ""}
         </p>
         <span className="size-11" />
       </div>
       <div className="relative z-10 flex flex-col items-center">
-        <div className="relative">
-          {call.phase === "ring" ? (
-            <>
-              <span className="absolute inset-0 rounded-full bg-primary/30 [animation:pulse-ring_1.6s_ease-out_infinite]" />
-              <span className="absolute inset-0 rounded-full bg-accent/20 [animation:pulse-ring_1.6s_ease-out_infinite_0.4s]" />
-            </>
-          ) : null}
-          <Avatar name={name} src={photo} size="hero" verified={person?.verified || person?.isAdmin} />
-        </div>
-        <h1 className="mt-5 font-display text-2xl font-semibold">{name}</h1>
-        <p className="mt-1 text-sm text-muted tabular-nums">
+        {!linked || call.kind !== "video" || call.phase === "ring" ? (
+          <>
+            <div className="relative">
+              {call.phase === "ring" ? (
+                <>
+                  <span className="absolute inset-0 rounded-full bg-primary/30 [animation:pulse-ring_1.6s_ease-out_infinite]" />
+                  <span className="absolute inset-0 rounded-full bg-accent/20 [animation:pulse-ring_1.6s_ease-out_infinite_0.4s]" />
+                </>
+              ) : null}
+              <Avatar name={name} src={photo} size="hero" verified={person?.verified || person?.isAdmin} />
+            </div>
+            <h1 className="mt-5 font-display text-2xl font-semibold">{name}</h1>
+          </>
+        ) : (
+          <h1 className="mt-2 font-display text-xl font-semibold drop-shadow">{name}</h1>
+        )}
+        <p className="mt-1 text-sm text-muted tabular-nums drop-shadow">
           {call.phase === "ring" ? ringLabel : formatDuration(seconds)}
         </p>
         {camError ? <p className="mt-2 text-xs text-danger">{camError}</p> : null}

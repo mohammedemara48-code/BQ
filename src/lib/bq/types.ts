@@ -49,7 +49,7 @@ export type ChatPreview = {
   isRequest: boolean;
 };
 
-export type MsgType = "text" | "image" | "video" | "file" | "voice";
+export type MsgType = "text" | "image" | "video" | "file" | "voice" | "call";
 
 export type Receipt = "sent" | "delivered" | "seen";
 

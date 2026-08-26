@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { getSql } from "@/lib/db";
 import { authMiddleware } from "@/lib/auth/middleware";
+import { pairIds } from "@/lib/utils";
 import { blockedSet, ensureMe, notify } from "./server";
 
 export type LiveCallRow = {
@@ -248,6 +249,20 @@ export const endCall = createServerFn({ method: "POST" })
       values
         (${row.caller_id}, ${row.callee_id}, ${row.kind}, ${"out"}, ${duration}),
         (${row.callee_id}, ${row.caller_id}, ${row.kind}, ${"in"}, ${duration})
+    `;
+    const [a, b] = pairIds(row.caller_id, row.callee_id);
+    const kindLabel = row.kind === "video" ? "فيديو" : "صوت";
+    let text = `مكالمة ${kindLabel}`;
+    if (reason === "missed") text = `مكالمة ${kindLabel} فائتة`;
+    else if (reason === "declined") text = `تم رفض مكالمة ${kindLabel}`;
+    else if (duration > 0) {
+      const m = Math.floor(duration / 60);
+      const s = duration % 60;
+      text = `مكالمة ${kindLabel} · ${m}:${s.toString().padStart(2, "0")}`;
+    }
+    await sql`
+      insert into messages (user_a, user_b, sender_id, type, text, delivered)
+      values (${a}, ${b}, ${context.userId}, ${"call"}, ${text}, ${true})
     `;
     return { ok: true as const };
   });

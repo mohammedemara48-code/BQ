@@ -65,6 +65,14 @@ export function MessageBody({
       </a>
     );
   }
+  if (type === "call") {
+    return (
+      <p className="flex items-center gap-1.5 whitespace-pre-wrap break-words opacity-90">
+        <span aria-hidden>📞</span>
+        <span>{text || "مكالمة"}</span>
+      </p>
+    );
+  }
   return <p className="whitespace-pre-wrap break-words">{text}</p>;
 }
 

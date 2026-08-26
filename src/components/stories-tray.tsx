@@ -70,11 +70,17 @@ export function StoriesTray() {
             </span>
           </span>
           <span className="w-full truncate text-center text-xs text-muted">
-            {busy ? "رفع…" : "حالتي"}
+            {busy ? "رفع…" : "صورة/فيديو"}
           </span>
         </button>
         {mine ? (
-          <StoryChip name="أنت" photo={me.data?.photoUrl} onClick={() => open(mine[1])} live />
+          <StoryChip
+            name="أنت"
+            photo={me.data?.photoUrl}
+            onClick={() => open(mine[1])}
+            live
+            hasVideo={mine[1].some((s) => s.type === "video")}
+          />
         ) : null}
         {others.map(([id, list]) => {
           const p = byId.get(id);
@@ -85,6 +91,7 @@ export function StoriesTray() {
               photo={p?.photoUrl}
               onClick={() => open(list)}
               live
+              hasVideo={list.some((s) => s.type === "video")}
             />
           );
         })}
@@ -156,16 +163,23 @@ function StoryChip({
   photo,
   onClick,
   live,
+  hasVideo,
 }: {
   name: string;
   photo?: string;
   onClick: () => void;
   live?: boolean;
+  hasVideo?: boolean;
 }) {
   return (
     <button type="button" onClick={onClick} className="flex w-16 shrink-0 flex-col items-center gap-1.5">
       <span className={live ? "rounded-full bg-primary p-[2px]" : ""}>
-        <Avatar name={name} src={photo} size="md" />
+        <span className="relative">
+          <Avatar name={name} src={photo} size="md" />
+          {hasVideo ? (
+            <span className="absolute bottom-0 end-0 rounded bg-bg/80 px-1 text-[9px] text-primary">فيديو</span>
+          ) : null}
+        </span>
       </span>
       <span className="w-full truncate text-center text-xs text-muted">{name}</span>
     </button>

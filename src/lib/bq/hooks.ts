@@ -206,7 +206,7 @@ export function useIncomingCall(enabled = false) {
     queryKey: ["incoming-call"],
     queryFn: () => incomingCall(),
     enabled,
-    refetchInterval: enabled ? 1400 : false,
+    refetchInterval: enabled ? 1000 : false,
     staleTime: 0,
     gcTime: 0,
   });
@@ -217,7 +217,7 @@ export function useCallSession(callId: number | null) {
     queryKey: ["call-session", callId],
     queryFn: () => pollCall({ data: { callId: callId!, since: 0 } }),
     enabled: Boolean(callId),
-    refetchInterval: callId ? 900 : false,
+    refetchInterval: callId ? 500 : false,
   });
 }
 
@@ -468,6 +468,8 @@ export function useBqMutations() {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["calls"] });
       void qc.invalidateQueries({ queryKey: ["incoming-call"] });
+      void qc.invalidateQueries({ queryKey: ["messages"] });
+      void qc.invalidateQueries({ queryKey: ["chats"] });
     },
   });
 
