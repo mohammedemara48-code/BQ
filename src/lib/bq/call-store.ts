@@ -3,13 +3,16 @@ import { startRingtone } from "./ringtone";
 
 export type CallKind = "audio" | "video";
 export type CallPhase = "ring" | "live";
+export type CallRole = "out" | "in";
 
 type CallState = {
   active: boolean;
+  callId: number | null;
   peerId: string;
   peerName: string;
   peerPhoto: string;
   kind: CallKind;
+  role: CallRole;
   phase: CallPhase;
   minimized: boolean;
   muted: boolean;
@@ -21,7 +24,17 @@ type CallState = {
     peerName?: string;
     peerPhoto?: string;
     kind: CallKind;
+    role?: CallRole;
+    callId?: number | null;
   }) => void;
+  incoming: (input: {
+    callId: number;
+    peerId: string;
+    peerName?: string;
+    peerPhoto?: string;
+    kind: CallKind;
+  }) => void;
+  setCallId: (id: number) => void;
   answer: () => void;
   minimize: () => void;
   expand: () => void;
@@ -33,12 +46,24 @@ type CallState = {
 
 let stopRing: (() => void) | null = null;
 
-export const useCallStore = create<CallState>((set) => ({
+function ringOn() {
+  stopRing?.();
+  stopRing = startRingtone();
+}
+
+function ringOff() {
+  stopRing?.();
+  stopRing = null;
+}
+
+export const useCallStore = create<CallState>((set, get) => ({
   active: false,
+  callId: null,
   peerId: "",
   peerName: "",
   peerPhoto: "",
   kind: "audio",
+  role: "out",
   phase: "ring",
   minimized: false,
   muted: false,
@@ -46,14 +71,15 @@ export const useCallStore = create<CallState>((set) => ({
   speaker: true,
   startedAt: null,
   start: (input) => {
-    stopRing?.();
-    stopRing = startRingtone();
+    ringOn();
     set({
       active: true,
+      callId: input.callId ?? null,
       peerId: input.peerId,
       peerName: input.peerName || "شخص",
       peerPhoto: input.peerPhoto || "",
       kind: input.kind,
+      role: input.role || "out",
       phase: "ring",
       minimized: false,
       muted: false,
@@ -62,17 +88,49 @@ export const useCallStore = create<CallState>((set) => ({
       startedAt: null,
     });
   },
+  incoming: (input) => {
+    const cur = get();
+    if (cur.active && cur.callId === input.callId) return;
+    if (cur.active) return;
+    ringOn();
+    try {
+      navigator.vibrate?.([400, 180, 400, 180, 400]);
+    } catch {
+      /* ignore */
+    }
+    set({
+      active: true,
+      callId: input.callId,
+      peerId: input.peerId,
+      peerName: input.peerName || "شخص",
+      peerPhoto: input.peerPhoto || "",
+      kind: input.kind,
+      role: "in",
+      phase: "ring",
+      minimized: false,
+      muted: false,
+      camOff: input.kind !== "video",
+      speaker: true,
+      startedAt: null,
+    });
+  },
+  setCallId: (id) => set({ callId: id }),
   answer: () => {
-    stopRing?.();
-    stopRing = null;
-    set({ phase: "live", startedAt: Date.now() });
+    ringOff();
+    set({ phase: "live", startedAt: Date.now(), minimized: false });
   },
   minimize: () => set({ minimized: true }),
   expand: () => set({ minimized: false }),
   hang: () => {
-    stopRing?.();
-    stopRing = null;
-    set({ active: false, phase: "ring", minimized: false, startedAt: null, peerId: "" });
+    ringOff();
+    set({
+      active: false,
+      callId: null,
+      phase: "ring",
+      minimized: false,
+      startedAt: null,
+      peerId: "",
+    });
   },
   setMuted: (v) => set({ muted: v }),
   setCamOff: (v) => set({ camOff: v }),
@@ -84,6 +142,8 @@ export function startCall(input: {
   peerName?: string;
   peerPhoto?: string;
   kind: CallKind;
+  role?: CallRole;
+  callId?: number | null;
 }) {
   useCallStore.getState().start(input);
 }

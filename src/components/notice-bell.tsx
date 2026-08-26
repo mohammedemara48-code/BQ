@@ -26,6 +26,8 @@ export function NoticeBell() {
       void navigate({ to: "/", search: { tab: "admin" } });
     } else if (kind === "request") {
       void navigate({ to: "/", search: { tab: "people" } });
+    } else if (kind === "call") {
+      void navigate({ to: "/", search: { tab: "calls" } });
     }
   }
 

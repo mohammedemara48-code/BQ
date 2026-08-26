@@ -1,9 +1,9 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { RedirectToSignIn } from "@/lib/auth/gates";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { findPerson, useMe, usePeople } from "@/lib/bq/hooks";
-import { startCall } from "@/lib/bq/call-store";
+import { beginOutgoingCall } from "@/lib/bq/start-call";
 
 export const Route = createFileRoute("/call/$peerId")({
   validateSearch: (s: Record<string, unknown>): { kind: "audio" | "video" } => ({
@@ -20,16 +20,19 @@ function CallPage() {
   const people = usePeople();
   const me = useMe();
   const person = findPerson(people.data, me.data, peerId);
+  const started = useRef(false);
 
   useEffect(() => {
-    if (!user) return;
-    startCall({
+    if (!user || started.current) return;
+    started.current = true;
+    void beginOutgoingCall({
       peerId,
       kind,
       peerName: person?.name,
       peerPhoto: person?.photoUrl,
+    }).then(() => {
+      void navigate({ to: "/chat/$peerId", params: { peerId } });
     });
-    void navigate({ to: "/chat/$peerId", params: { peerId } });
   }, [user, peerId, kind, person?.name, person?.photoUrl, navigate]);
 
   if (isPending) return <div className="min-h-dvh bg-bg" />;

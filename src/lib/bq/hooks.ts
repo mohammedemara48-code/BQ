@@ -47,8 +47,14 @@ import {
   sendRoomMessage,
   setRoomSpeaker,
 } from "./live";
+import {
+  answerCall,
+  endCall,
+  incomingCall,
+  pollCall,
+  postCallSignal,
+} from "./call-live";
 import type { MsgType, Profile } from "./types";
-
 export function useMe(enabled = true) {
   return useQuery({ queryKey: ["me"], queryFn: () => getMe(), enabled });
 }
@@ -195,6 +201,26 @@ export function useBlobStatus(enabled = false) {
   });
 }
 
+export function useIncomingCall(enabled = false) {
+  return useQuery({
+    queryKey: ["incoming-call"],
+    queryFn: () => incomingCall(),
+    enabled,
+    refetchInterval: enabled ? 1400 : false,
+    staleTime: 0,
+    gcTime: 0,
+  });
+}
+
+export function useCallSession(callId: number | null) {
+  return useQuery({
+    queryKey: ["call-session", callId],
+    queryFn: () => pollCall({ data: { callId: callId!, since: 0 } }),
+    enabled: Boolean(callId),
+    refetchInterval: callId ? 900 : false,
+  });
+}
+
 type ProfilePatch = {
   name?: string;
   bio?: string;
@@ -234,6 +260,8 @@ export function useBqMutations() {
     void qc.invalidateQueries({ queryKey: ["admin-mail"] });
     void qc.invalidateQueries({ queryKey: ["admin-thread"] });
     void qc.invalidateQueries({ queryKey: ["admin-badge"] });
+    void qc.invalidateQueries({ queryKey: ["incoming-call"] });
+    void qc.invalidateQueries({ queryKey: ["call-session"] });
   };
 
   const send = useMutation({
@@ -430,6 +458,24 @@ export function useBqMutations() {
     onSuccess: invalidateAll,
   });
 
+  const pickUp = useMutation({
+    mutationFn: (callId: number) => answerCall({ data: { callId } }),
+  });
+
+  const hangLive = useMutation({
+    mutationFn: (input: { callId: number; reason?: "hang" | "decline" }) =>
+      endCall({ data: { callId: input.callId, reason: input.reason } }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["calls"] });
+      void qc.invalidateQueries({ queryKey: ["incoming-call"] });
+    },
+  });
+
+  const sendSignal = useMutation({
+    mutationFn: (input: { callId: number; kind: "offer" | "answer" | "ice"; payload: string }) =>
+      postCallSignal({ data: input }),
+  });
+
   return {
     send,
     request,
@@ -457,6 +503,9 @@ export function useBqMutations() {
     closeMail,
     closeReport,
     acceptMsg,
+    pickUp,
+    hangLive,
+    sendSignal,
   };
 }
 

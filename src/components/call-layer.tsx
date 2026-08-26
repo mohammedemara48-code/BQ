@@ -1,24 +1,86 @@
-import { ChevronDown, Maximize2, Mic, MicOff, Phone, PhoneOff, Video, VideoOff, Volume2, VolumeX } from "lucide-react";
+import {
+  ChevronDown,
+  Maximize2,
+  Mic,
+  MicOff,
+  Phone,
+  PhoneOff,
+  Video,
+  VideoOff,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import { Avatar } from "@/components/avatar";
-import { useBqMutations, useMe, usePeople, findPerson } from "@/lib/bq/hooks";
+import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { callDurationSec, useCallStore } from "@/lib/bq/call-store";
+import { MediaCall } from "@/lib/bq/webrtc-call";
+import { findPerson, useBqMutations, useCallSession, useIncomingCall, useMe, usePeople } from "@/lib/bq/hooks";
 import { cn, formatDuration } from "@/lib/utils";
 
 export function CallLayer() {
+  const { user } = useCurrentUserState();
   const call = useCallStore();
+  const incoming = useIncomingCall(Boolean(user) && !call.active);
+  const session = useCallSession(call.callId);
   const people = usePeople(call.active);
   const me = useMe(call.active);
-  const { recordCall } = useBqMutations();
+  const { pickUp, hangLive, sendSignal } = useBqMutations();
   const person = findPerson(people.data, me.data, call.peerId);
   const [seconds, setSeconds] = useState(0);
   const [camError, setCamError] = useState("");
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const pipRef = useRef<HTMLVideoElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
+  const [linked, setLinked] = useState(false);
+  const [rtcReady, setRtcReady] = useState(false);
+  const localRef = useRef<HTMLVideoElement>(null);
+  const remoteRef = useRef<HTMLVideoElement>(null);
+  const pipLocalRef = useRef<HTMLVideoElement>(null);
+  const remoteAudioRef = useRef<HTMLAudioElement>(null);
+  const rtcRef = useRef<MediaCall | null>(null);
+  const seenSignals = useRef(0);
+  const offered = useRef(false);
+  const closing = useRef(false);
+  const endedIds = useRef(new Set<number>());
+  const sendRef = useRef(sendSignal.mutateAsync);
+  sendRef.current = sendSignal.mutateAsync;
+  const hangRef = useRef(hangLive.mutateAsync);
+  hangRef.current = hangLive.mutateAsync;
+  const mediaOn = Boolean(call.active && call.callId && (call.role === "out" || call.phase === "live"));
 
   const name = person?.name || call.peerName || "شخص";
   const photo = person?.photoUrl || call.peerPhoto;
+
+  useEffect(() => {
+    const row = incoming.data;
+    if (!row || call.active) return;
+    if (endedIds.current.has(row.id)) return;
+    useCallStore.getState().incoming({
+      callId: row.id,
+      peerId: row.callerId,
+      peerName: row.callerName,
+      peerPhoto: row.callerPhoto,
+      kind: row.kind,
+    });
+  }, [incoming.data, call.active]);
+
+  useEffect(() => {
+    const row = session.data?.call;
+    if (!row || !call.active) return;
+    if (row.status === "live" && call.phase === "ring") {
+      useCallStore.getState().answer();
+    }
+    if (row.status === "declined" || row.status === "missed" || row.status === "ended") {
+      if (closing.current) return;
+      closing.current = true;
+      endedIds.current.add(row.id);
+      rtcRef.current?.close();
+      rtcRef.current = null;
+      useCallStore.getState().hang();
+      if (row.status === "declined") toast.error("تم رفض المكالمة");
+      else if (row.status === "missed" && call.role === "out") toast.error("لا رد");
+      closing.current = false;
+    }
+  }, [session.data?.call?.status, call.active, call.phase, call.role]);
 
   useEffect(() => {
     if (!call.active || call.phase !== "live") {
@@ -31,69 +93,147 @@ export function CallLayer() {
   }, [call.active, call.phase]);
 
   useEffect(() => {
-    if (!call.active || call.kind !== "video" || call.camOff) {
-      streamRef.current?.getTracks().forEach((tr) => tr.stop());
-      streamRef.current = null;
-      if (videoRef.current) videoRef.current.srcObject = null;
-      if (pipRef.current) pipRef.current.srcObject = null;
-      return;
-    }
-    let gone = false;
-    void navigator.mediaDevices
-      .getUserMedia({ video: { facingMode: "user" }, audio: true })
-      .then((stream) => {
-        if (gone) {
-          stream.getTracks().forEach((tr) => tr.stop());
-          return;
-        }
-        streamRef.current = stream;
-        stream.getAudioTracks().forEach((tr) => {
-          tr.enabled = !call.muted;
-        });
-        const apply = (el: HTMLVideoElement | null) => {
-          if (!el) return;
-          el.srcObject = stream;
-          void el.play();
-        };
-        apply(videoRef.current);
-        apply(pipRef.current);
-      })
-      .catch(() => setCamError("اسمح للكاميرا من إعدادات المتصفح"));
-    return () => {
-      gone = true;
-      streamRef.current?.getTracks().forEach((tr) => tr.stop());
-      streamRef.current = null;
+    if (!mediaOn) return;
+    if (rtcRef.current) return;
+    const media = new MediaCall();
+    rtcRef.current = media;
+    offered.current = false;
+    seenSignals.current = 0;
+    setLinked(false);
+    setRtcReady(false);
+    media.onLocalStream = (stream) => {
+      const apply = (el: HTMLVideoElement | null) => {
+        if (!el) return;
+        el.srcObject = stream;
+        el.muted = true;
+        void el.play();
+      };
+      apply(localRef.current);
+      apply(pipLocalRef.current);
     };
-  }, [call.active, call.kind, call.camOff, call.muted]);
+    media.onRemoteStream = (stream) => {
+      setLinked(true);
+      if (remoteRef.current) {
+        remoteRef.current.srcObject = stream;
+        remoteRef.current.muted = !useCallStore.getState().speaker;
+        void remoteRef.current.play();
+      }
+      if (remoteAudioRef.current) {
+        remoteAudioRef.current.srcObject = stream;
+        remoteAudioRef.current.muted = !useCallStore.getState().speaker;
+        void remoteAudioRef.current.play();
+      }
+    };
+    media.onSignal = (kind, payload) => {
+      const id = useCallStore.getState().callId;
+      if (!id) return;
+      void sendRef.current({ callId: id, kind, payload: JSON.stringify(payload) });
+    };
+    void media
+      .open(call.kind === "video")
+      .then(() => {
+        media.setMuted(useCallStore.getState().muted);
+        media.setCamOff(useCallStore.getState().camOff);
+        if (useCallStore.getState().role === "out" && !offered.current) {
+          offered.current = true;
+          return media.offer();
+        }
+        return undefined;
+      })
+      .then(() => setRtcReady(true))
+      .catch(() => setCamError("اسمح للميكروفون والكاميرا من الإعدادات"));
+    return () => {
+      media.close();
+      if (rtcRef.current === media) rtcRef.current = null;
+    };
+  }, [mediaOn, call.kind]);
 
   useEffect(() => {
-    streamRef.current?.getAudioTracks().forEach((tr) => {
-      tr.enabled = !call.muted;
-    });
+    rtcRef.current?.setMuted(call.muted);
   }, [call.muted]);
 
   useEffect(() => {
-    const stream = streamRef.current;
-    if (!stream) return;
-    const el = call.minimized ? pipRef.current : videoRef.current;
-    if (el) {
-      el.srcObject = stream;
-      void el.play();
+    rtcRef.current?.setCamOff(call.camOff);
+  }, [call.camOff]);
+
+  useEffect(() => {
+    const mute = !call.speaker;
+    if (remoteRef.current) remoteRef.current.muted = mute;
+    if (remoteAudioRef.current) remoteAudioRef.current.muted = mute;
+  }, [call.speaker]);
+
+  useEffect(() => {
+    const media = rtcRef.current;
+    const signals = session.data?.signals;
+    if (!media?.ready || !signals) return;
+    const mine = me.data?.userId;
+    for (const s of signals) {
+      if (s.id <= seenSignals.current) continue;
+      if (mine && s.fromId === mine) {
+        seenSignals.current = s.id;
+        continue;
+      }
+      let payload: unknown = s.payload;
+      try {
+        payload = JSON.parse(s.payload) as unknown;
+      } catch {
+        seenSignals.current = s.id;
+        continue;
+      }
+      void media.handle(s.kind, payload);
+      seenSignals.current = s.id;
     }
-  }, [call.minimized, call.active, call.camOff]);
+  }, [session.data?.signals, me.data?.userId, rtcReady]);
+
+  useEffect(() => {
+    if (!call.active || call.role !== "out" || call.phase !== "ring") return;
+    const t = window.setTimeout(() => {
+      const cur = useCallStore.getState();
+      if (!cur.active || cur.phase !== "ring" || !cur.callId) return;
+      endedIds.current.add(cur.callId);
+      void hangRef.current({ callId: cur.callId, reason: "hang" });
+      rtcRef.current?.close();
+      rtcRef.current = null;
+      cur.hang();
+      toast.error("لا رد");
+    }, 45_000);
+    return () => window.clearTimeout(t);
+  }, [call.active, call.role, call.phase, call.callId]);
+
+  function finish(reason: "hang" | "decline") {
+    const id = call.callId;
+    closing.current = true;
+    if (id) endedIds.current.add(id);
+    rtcRef.current?.close();
+    rtcRef.current = null;
+    call.hang();
+    if (id) void hangRef.current({ callId: id, reason });
+    closing.current = false;
+  }
+
+  async function accept() {
+    if (!call.callId) return;
+    const res = await pickUp.mutateAsync(call.callId);
+    if (!res.ok) {
+      toast.error("تعذر الرد");
+      finish("hang");
+      return;
+    }
+    call.answer();
+  }
 
   if (!call.active) return null;
 
-  function hang() {
-    streamRef.current?.getTracks().forEach((tr) => tr.stop());
-    const dur = call.phase === "live" ? callDurationSec() : 0;
-    const peerId = call.peerId;
-    const kind = call.kind;
-    call.hang();
-    if (peerId) {
-      void recordCall.mutateAsync({ peerId, kind, durationSec: dur });
-    }
-  }
+  const ringLabel =
+    call.role === "in"
+      ? call.kind === "video"
+        ? "مكالمة فيديو واردة"
+        : "مكالمة واردة"
+      : call.kind === "video"
+        ? "جاري الاتصال فيديو…"
+        : "جاري الاتصال…";
+
+  const showRemote = Boolean(remoteRef.current?.srcObject) || linked;
 
   if (call.minimized) {
     return (
@@ -104,14 +244,14 @@ export function CallLayer() {
         aria-label="تكبير المكالمة"
       >
         {call.kind === "video" && !call.camOff ? (
-          <video ref={pipRef} muted playsInline autoPlay className="size-12 rounded-lg object-cover" />
+          <video ref={pipLocalRef} muted playsInline autoPlay className="size-12 rounded-lg object-cover" />
         ) : (
           <Avatar name={name} src={photo} size="sm" />
         )}
         <span className="min-w-0 flex-1">
           <span className="block truncate text-xs font-medium">{name}</span>
           <span className="text-[11px] text-muted tabular-nums">
-            {call.phase === "ring" ? "رنين…" : formatDuration(seconds)}
+            {call.phase === "ring" ? (call.role === "in" ? "واردة" : "رنين…") : formatDuration(seconds)}
           </span>
         </span>
         <span
@@ -120,10 +260,10 @@ export function CallLayer() {
           className="grid size-9 place-items-center rounded-full bg-danger text-primary-fg"
           onClick={(e) => {
             e.stopPropagation();
-            hang();
+            finish("hang");
           }}
           onKeyDown={(e) => {
-            if (e.key === "Enter") hang();
+            if (e.key === "Enter") finish("hang");
           }}
           aria-label="إنهاء"
         >
@@ -135,14 +275,30 @@ export function CallLayer() {
 
   return (
     <div className="fixed inset-0 z-40 mx-auto flex min-h-dvh w-full max-w-lg flex-col items-center justify-between overflow-hidden bg-bg px-6 py-10">
-      {call.kind === "video" && !call.camOff ? (
-        <video
-          ref={videoRef}
-          muted={!call.speaker}
-          playsInline
-          autoPlay
-          className="absolute inset-0 size-full object-cover"
-        />
+      <audio ref={remoteAudioRef} autoPlay />
+      {call.kind === "video" ? (
+        <>
+          <video
+            ref={remoteRef}
+            playsInline
+            autoPlay
+            className={cn("absolute inset-0 size-full object-cover", showRemote ? "opacity-100" : "opacity-0")}
+          />
+          {photo && !showRemote ? (
+            <img
+              src={photo}
+              alt=""
+              className="pointer-events-none absolute inset-0 size-full object-cover object-center opacity-25 blur-2xl"
+            />
+          ) : null}
+          <video
+            ref={localRef}
+            muted
+            playsInline
+            autoPlay
+            className="absolute bottom-36 end-4 z-10 h-36 w-24 rounded-xl border border-border object-cover shadow-[var(--shadow-glow)]"
+          />
+        </>
       ) : photo ? (
         <img
           src={photo}
@@ -160,7 +316,10 @@ export function CallLayer() {
         >
           <ChevronDown className="size-5" />
         </button>
-        <p className="text-xs text-muted">{call.kind === "video" ? "مكالمة فيديو" : "مكالمة صوت"}</p>
+        <p className="text-xs text-muted">
+          {call.kind === "video" ? "مكالمة فيديو" : "مكالمة صوت"}
+          {call.phase === "live" && linked ? " · متصل" : ""}
+        </p>
         <span className="size-11" />
       </div>
       <div className="relative z-10 flex flex-col items-center">
@@ -175,22 +334,22 @@ export function CallLayer() {
         </div>
         <h1 className="mt-5 font-display text-2xl font-semibold">{name}</h1>
         <p className="mt-1 text-sm text-muted tabular-nums">
-          {call.phase === "ring" ? (call.kind === "video" ? "رنين فيديو…" : "رنين…") : formatDuration(seconds)}
+          {call.phase === "ring" ? ringLabel : formatDuration(seconds)}
         </p>
         {camError ? <p className="mt-2 text-xs text-danger">{camError}</p> : null}
       </div>
 
       <div className="relative z-10 mb-6 flex items-center gap-3">
-        {call.phase === "ring" ? (
+        {call.phase === "ring" && call.role === "in" ? (
           <button
             type="button"
-            onClick={() => call.answer()}
+            onClick={() => void accept()}
             className="grid size-16 place-items-center rounded-full bg-online text-bg"
             aria-label="رد"
           >
             <Phone className="size-6" />
           </button>
-        ) : (
+        ) : call.phase === "live" ? (
           <>
             <button
               type="button"
@@ -228,7 +387,7 @@ export function CallLayer() {
               </button>
             ) : null}
           </>
-        )}
+        ) : null}
         <button
           type="button"
           onClick={() => call.minimize()}
@@ -239,9 +398,9 @@ export function CallLayer() {
         </button>
         <button
           type="button"
-          onClick={hang}
+          onClick={() => finish(call.role === "in" && call.phase === "ring" ? "decline" : "hang")}
           className="grid size-16 place-items-center rounded-full bg-danger text-primary-fg"
-          aria-label="إنهاء"
+          aria-label={call.role === "in" && call.phase === "ring" ? "رفض" : "إنهاء"}
         >
           <PhoneOff className="size-6" />
         </button>
