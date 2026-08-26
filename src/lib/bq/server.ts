@@ -3,7 +3,7 @@ import { z } from "zod";
 import { getSql } from "@/lib/db";
 import { authMiddleware } from "@/lib/auth/middleware";
 import { haversineKm, pairIds } from "@/lib/utils";
-import { COMMUNITY, communityById, isCommunityId } from "./community";
+import { isCommunityId } from "./community";
 import type {
   CallLog,
   ChatPreview,
@@ -12,10 +12,11 @@ import type {
   Message,
   Notice,
   Profile,
+  Receipt,
   Role,
 } from "./types";
 
-type ProfileRow = {
+export type ProfileRow = {
   user_id: string;
   name: string;
   bio: string;
@@ -28,6 +29,7 @@ type ProfileRow = {
   online: boolean;
   is_community: boolean;
   is_admin: boolean;
+  verified: boolean;
   latitude: number | null;
   longitude: number | null;
   created_at: string;
@@ -48,7 +50,7 @@ function parseList(raw: string): string[] {
   }
 }
 
-function toProfile(
+export function toProfile(
   row: ProfileRow,
   opts: {
     includeCoords?: boolean;
@@ -60,6 +62,7 @@ function toProfile(
   const gallery = parseList(row.gallery ?? "[]");
   const priv = parseList(row.private_gallery ?? "[]");
   const showPrivate = Boolean(opts.includePrivate);
+  const isAdmin = Boolean(row.is_admin);
   return {
     userId: row.user_id,
     name: row.name,
@@ -72,7 +75,8 @@ function toProfile(
     coverUrl: row.cover_url,
     online: row.online,
     isCommunity: row.is_community,
-    isAdmin: Boolean(row.is_admin),
+    isAdmin,
+    verified: Boolean(row.verified) || isAdmin,
     role: (row.role as Role) || "",
     intent: (row.intent as Intent) || "",
     phone: opts.includeCoords ? row.phone || "" : "",
@@ -88,54 +92,32 @@ function toProfile(
   };
 }
 
-async function seedCommunity() {
-  const sql = await getSql();
-  const stale = await sql<{ user_id: string }>`
-    select user_id from profiles
-    where is_community = true and user_id like 'c:%'
-  `;
-  if (stale.length > 0) {
-    await sql`delete from messages where user_a like 'c:%' or user_b like 'c:%'`;
-    await sql`delete from requests where from_id like 'c:%' or to_id like 'c:%'`;
-    await sql`delete from calls where peer_id like 'c:%'`;
-    await sql`delete from profiles where is_community = true and user_id like 'c:%'`;
-  }
-  for (const p of COMMUNITY) {
-    await sql`
-      insert into profiles (
-        user_id, name, bio, pronouns, city, looking_for, interests,
-        photo_url, online, is_community, role, intent, latitude, longitude, show_on_map,
-        gallery, private_gallery
-      ) values (
-        ${p.id}, ${p.name}, ${p.bio}, ${p.pronouns}, ${p.city}, ${p.lookingFor},
-        ${JSON.stringify(p.interests)}, ${p.photoUrl}, ${p.online}, ${true},
-        ${p.role}, ${p.intent}, ${p.latitude}, ${p.longitude}, ${true},
-        ${JSON.stringify(p.photoUrl ? [p.photoUrl] : [])},
-        ${JSON.stringify(p.hasPrivatePhotos && p.photoUrl ? [p.photoUrl] : [])}
-      )
-      on conflict (user_id) do update set
-        name = excluded.name,
-        bio = excluded.bio,
-        photo_url = excluded.photo_url,
-        online = excluded.online,
-        city = excluded.city,
-        looking_for = excluded.looking_for,
-        interests = excluded.interests,
-        pronouns = excluded.pronouns,
-        role = excluded.role,
-        intent = excluded.intent,
-        latitude = excluded.latitude,
-        longitude = excluded.longitude,
-        gallery = excluded.gallery,
-        private_gallery = excluded.private_gallery
-    `;
-  }
-}
-
-async function claimOwnerIfOpen(userId: string): Promise<boolean> {
+async function purgeDemoPeople() {
   const sql = await getSql();
   await sql`
-    update profiles set is_admin = true
+    delete from messages
+    where user_a like 'bq-%' or user_b like 'bq-%'
+       or user_a like 'c:%' or user_b like 'c:%'
+  `;
+  await sql`
+    delete from requests
+    where from_id like 'bq-%' or to_id like 'bq-%'
+       or from_id like 'c:%' or to_id like 'c:%'
+  `;
+  await sql`delete from calls where peer_id like 'bq-%' or peer_id like 'c:%' or user_id like 'bq-%'`;
+  await sql`delete from notifications where from_id like 'bq-%' or user_id like 'bq-%'`;
+  await sql`delete from photo_access where owner_id like 'bq-%' or viewer_id like 'bq-%'`;
+  await sql`delete from photo_requests where owner_id like 'bq-%' or viewer_id like 'bq-%'`;
+  await sql`delete from blocks where blocker_id like 'bq-%' or blocked_id like 'bq-%'`;
+  await sql`delete from reports where target_id like 'bq-%' or reporter_id like 'bq-%'`;
+  await sql`delete from profiles where is_community = true`;
+  await sql`delete from profiles where user_id like 'bq-%' or user_id like 'c:%'`;
+}
+
+export async function claimOwnerIfOpen(userId: string): Promise<boolean> {
+  const sql = await getSql();
+  await sql`
+    update profiles set is_admin = true, verified = true
     where user_id = ${userId}
       and is_community = false
       and not exists (
@@ -148,7 +130,7 @@ async function claimOwnerIfOpen(userId: string): Promise<boolean> {
   return Boolean(rows[0]?.is_admin);
 }
 
-async function notify(userId: string, kind: string, fromId: string, text: string) {
+export async function notify(userId: string, kind: string, fromId: string, text: string) {
   if (userId === fromId) return;
   const sql = await getSql();
   await sql`
@@ -157,7 +139,17 @@ async function notify(userId: string, kind: string, fromId: string, text: string
   `;
 }
 
-async function blockedSet(userId: string): Promise<Set<string>> {
+export async function notifyAdmins(kind: string, fromId: string, text: string) {
+  const sql = await getSql();
+  const owners = await sql<{ user_id: string }>`
+    select user_id from profiles where is_admin = true
+  `;
+  for (const o of owners) {
+    await notify(o.user_id, kind, fromId, text);
+  }
+}
+
+export async function blockedSet(userId: string): Promise<Set<string>> {
   const sql = await getSql();
   const rows = await sql<{ other: string }>`
     select blocked_id as other from blocks where blocker_id = ${userId}
@@ -167,12 +159,12 @@ async function blockedSet(userId: string): Promise<Set<string>> {
   return new Set(rows.map((r) => r.other));
 }
 
-async function ensureMe(
+export async function ensureMe(
   userId: string,
   hint?: { name?: string | null; image?: string | null },
 ): Promise<Profile> {
   const sql = await getSql();
-  await seedCommunity();
+  await purgeDemoPeople();
   const existing = await sql<ProfileRow>`
     select * from profiles where user_id = ${userId} limit 1
   `;
@@ -193,6 +185,12 @@ async function ensureMe(
   return toProfile(created[0]!, { includeCoords: true, includePrivate: true, granted: true });
 }
 
+function receiptOf(delivered: boolean, seenAt: string | null): Receipt {
+  if (seenAt) return "seen";
+  if (delivered) return "delivered";
+  return "sent";
+}
+
 const idInput = z.object({ peerId: z.string().min(1).max(120) });
 
 export const getMe = createServerFn({ method: "GET" })
@@ -204,7 +202,7 @@ export const getMe = createServerFn({ method: "GET" })
 export const listPeople = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
-    await seedCommunity();
+    await purgeDemoPeople();
     const sql = await getSql();
     const meRow = await sql<ProfileRow>`
       select * from profiles where user_id = ${context.userId} limit 1
@@ -214,7 +212,8 @@ export const listPeople = createServerFn({ method: "GET" })
     const rows = await sql<ProfileRow>`
       select * from profiles
       where user_id <> ${context.userId}
-        and (is_community = true or length(trim(bio)) > 0 or length(trim(photo_url)) > 0 or length(trim(role)) > 0)
+        and is_community = false
+        and (length(trim(bio)) > 0 or length(trim(photo_url)) > 0 or length(trim(role)) > 0)
       order by online desc, name asc
     `;
     return rows
@@ -245,7 +244,7 @@ export const getPerson = createServerFn({ method: "GET" })
     if (blocked.has(data.id)) return null;
     const sql = await getSql();
     const rows = await sql<ProfileRow>`
-      select * from profiles where user_id = ${data.id} limit 1
+      select * from profiles where user_id = ${data.id} and is_community = false limit 1
     `;
     const row = rows[0];
     if (!row) return null;
@@ -322,10 +321,19 @@ export const listChats = createServerFn({ method: "GET" })
       type: string;
       sender_id: string;
       created_at: string;
+      delivered: boolean;
+      seen_at: string | null;
+      unread: number;
     }>`
       select
         case when user_a = ${me} then user_b else user_a end as peer_id,
-        text, type, sender_id, created_at::text as created_at
+        text, type, sender_id, created_at::text as created_at,
+        delivered, seen_at::text as seen_at,
+        (
+          select count(*)::int from messages m2
+          where m2.user_a = messages.user_a and m2.user_b = messages.user_b
+            and m2.sender_id <> ${me} and m2.seen_at is null
+        ) as unread
       from messages
       where (user_a = ${me} or user_b = ${me})
         and id in (
@@ -341,7 +349,9 @@ export const listChats = createServerFn({ method: "GET" })
       lastType: r.type,
       lastSenderId: r.sender_id,
       lastAt: r.created_at,
-      unread: 0,
+      unread: r.unread ?? 0,
+      lastDelivered: Boolean(r.delivered),
+      lastSeen: Boolean(r.seen_at),
     }));
     return previews;
   });
@@ -352,6 +362,17 @@ export const listMessages = createServerFn({ method: "GET" })
   .handler(async ({ context, data }) => {
     const [a, b] = pairIds(context.userId, data.peerId);
     const sql = await getSql();
+    const me = context.userId;
+    await sql`
+      update messages set delivered = true
+      where user_a = ${a} and user_b = ${b}
+        and sender_id <> ${me} and delivered = false
+    `;
+    await sql`
+      update messages set seen_at = now()
+      where user_a = ${a} and user_b = ${b}
+        and sender_id <> ${me} and seen_at is null
+    `;
     const rows = await sql<{
       id: number;
       sender_id: string;
@@ -362,31 +383,33 @@ export const listMessages = createServerFn({ method: "GET" })
       opened: boolean;
       duration_sec: number;
       created_at: string;
+      delivered: boolean;
+      seen_at: string | null;
     }>`
       select id, sender_id, type, text, file_url, view_once, opened,
-             duration_sec, created_at::text as created_at
+             duration_sec, created_at::text as created_at,
+             delivered, seen_at::text as seen_at
       from messages
       where user_a = ${a} and user_b = ${b}
       order by id asc
     `;
-    return rows.map(
-      (r): Message => ({
+    return rows.map((r): Message => {
+      const hidden = r.view_once && !r.opened && r.sender_id !== me;
+      return {
         id: r.id,
         senderId: r.sender_id,
         type: r.type,
-        text: r.view_once && !r.opened && r.sender_id !== context.userId
-          ? ""
-          : r.text,
-        fileUrl:
-          r.view_once && !r.opened && r.sender_id !== context.userId
-            ? null
-            : r.file_url,
+        text: hidden ? "" : r.text,
+        fileUrl: hidden ? null : r.file_url,
         viewOnce: r.view_once,
         opened: r.opened,
         durationSec: r.duration_sec ?? 0,
         createdAt: r.created_at,
-      }),
-    );
+        delivered: Boolean(r.delivered),
+        seenAt: r.seen_at,
+        receipt: receiptOf(Boolean(r.delivered), r.seen_at),
+      };
+    });
   });
 
 const sendInput = z.object({
@@ -409,10 +432,10 @@ export const sendMessage = createServerFn({ method: "POST" })
     const [a, b] = pairIds(context.userId, data.peerId);
     const sql = await getSql();
     await sql`
-      insert into messages (user_a, user_b, sender_id, type, text, file_url, view_once, duration_sec)
+      insert into messages (user_a, user_b, sender_id, type, text, file_url, view_once, duration_sec, delivered)
       values (
         ${a}, ${b}, ${context.userId}, ${data.type}, ${text},
-        ${data.fileUrl ?? null}, ${data.viewOnce ?? false}, ${data.durationSec ?? 0}
+        ${data.fileUrl ?? null}, ${data.viewOnce ?? false}, ${data.durationSec ?? 0}, ${false}
       )
     `;
     return { ok: true as const };
@@ -437,22 +460,8 @@ export const openViewOnce = createServerFn({ method: "POST" })
 export const replyFromPeer = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((d: { peerId: string }) => idInput.parse(d))
-  .handler(async ({ context, data }) => {
-    const seed = communityById(data.peerId);
-    if (!seed) return { ok: false as const };
-    const [a, b] = pairIds(context.userId, data.peerId);
-    const sql = await getSql();
-    const countRows = await sql<{ n: number }>`
-      select count(*)::int as n from messages
-      where user_a = ${a} and user_b = ${b} and sender_id = ${data.peerId}
-    `;
-    const n = countRows[0]?.n ?? 0;
-    const text = seed.replies[n % seed.replies.length] ?? "تمام.";
-    await sql`
-      insert into messages (user_a, user_b, sender_id, type, text)
-      values (${a}, ${b}, ${data.peerId}, ${"text"}, ${text})
-    `;
-    return { ok: true as const, text };
+  .handler(async () => {
+    return { ok: false as const, text: "" };
   });
 
 export const listRequests = createServerFn({ method: "GET" })
@@ -499,8 +508,6 @@ export const sendRequest = createServerFn({ method: "POST" })
     `;
     if (status === "pending") {
       await notify(data.peerId, "request", context.userId, "طلب صداقة");
-    } else if (status === "accepted") {
-      await notify(context.userId, "accepted", data.peerId, "تم قبول طلبك");
     }
     return { ok: true as const, status };
   });
@@ -621,6 +628,11 @@ export const removeMember = createServerFn({ method: "POST" })
     await sql`delete from messages where user_a = ${data.userId} or user_b = ${data.userId}`;
     await sql`delete from requests where from_id = ${data.userId} or to_id = ${data.userId}`;
     await sql`delete from calls where user_id = ${data.userId} or peer_id = ${data.userId}`;
+    await sql`delete from stories where user_id = ${data.userId}`;
+    await sql`delete from room_members where user_id = ${data.userId}`;
+    await sql`delete from room_messages where sender_id = ${data.userId}`;
+    await sql`delete from verify_requests where user_id = ${data.userId}`;
+    await sql`delete from admin_inbox where user_id = ${data.userId}`;
     await sql`delete from profiles where user_id = ${data.userId} and is_admin = false and is_community = false`;
     return { ok: true as const };
   });
@@ -701,26 +713,44 @@ export const unfriend = createServerFn({ method: "POST" })
 
 export const reportUser = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((d: { userId: string; reason: string }) =>
+  .validator((d: unknown) =>
     z
       .object({
         userId: z.string().min(1).max(120),
         reason: z.string().min(1).max(280),
+        kind: z.enum(["user", "message", "room", "attachment"]).optional(),
+        messageId: z.number().int().optional(),
+        roomId: z.number().int().optional(),
+        roomMessageId: z.number().int().optional(),
+        snippet: z.string().max(400).optional(),
       })
       .parse(d),
   )
   .handler(async ({ context, data }) => {
     const sql = await getSql();
-    await sql`
-      insert into reports (reporter_id, target_id, reason)
-      values (${context.userId}, ${data.userId}, ${data.reason})
-    `;
-    const owners = await sql<{ user_id: string }>`
-      select user_id from profiles where is_admin = true limit 3
-    `;
-    for (const o of owners) {
-      await notify(o.user_id, "report", context.userId, `بلاغ: ${data.reason}`);
+    let peerA = "";
+    let peerB = "";
+    if (data.messageId) {
+      const msg = await sql<{ user_a: string; user_b: string; text: string; type: string }>`
+        select user_a, user_b, text, type from messages where id = ${data.messageId} limit 1
+      `;
+      if (msg[0]) {
+        peerA = msg[0].user_a;
+        peerB = msg[0].user_b;
+      }
     }
+    await sql`
+      insert into reports (
+        reporter_id, target_id, reason, kind, message_id, room_id, room_message_id,
+        status, peer_a, peer_b, snippet
+      )
+      values (
+        ${context.userId}, ${data.userId}, ${data.reason}, ${data.kind ?? "user"},
+        ${data.messageId ?? null}, ${data.roomId ?? null}, ${data.roomMessageId ?? null},
+        ${"open"}, ${peerA}, ${peerB}, ${data.snippet ?? ""}
+      )
+    `;
+    await notifyAdmins("report", context.userId, `بلاغ: ${data.reason}`);
     return { ok: true as const };
   });
 

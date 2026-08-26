@@ -1,9 +1,8 @@
-import { Camera, LogOut, MapPin, Shield, Users } from "lucide-react";
+import { BadgeCheck, Camera, LogOut, Mail, MapPin, Shield, Users } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AdminPanel } from "@/components/admin-panel";
 import { Avatar } from "@/components/avatar";
-import { InstallBanner } from "@/components/pwa-register";
 import { Button } from "@/components/ui/button";
 import { Input, Label, Textarea } from "@/components/ui/input";
 import { forgetAccount, listAccounts, switchAccount } from "@/lib/bq/accounts";
@@ -17,11 +16,12 @@ import { cn, compressImage } from "@/lib/utils";
 export function ProfileTab() {
   const me = useMe();
   const user = useCurrentUser();
-  const { saveMe } = useBqMutations();
+  const { saveMe, askVerify, mailAdmin, postStory } = useBqMutations();
   const photoRef = useRef<HTMLInputElement>(null);
   const coverRef = useRef<HTMLInputElement>(null);
   const pubRef = useRef<HTMLInputElement>(null);
   const privRef = useRef<HTMLInputElement>(null);
+  const storyRef = useRef<HTMLInputElement>(null);
   const [name, setName] = useState("");
   const [bio, setBio] = useState("");
   const [city, setCity] = useState("");
@@ -30,6 +30,7 @@ export function ProfileTab() {
   const [intent, setIntent] = useState<Intent>("");
   const [showOnMap, setShowOnMap] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [mail, setMail] = useState("");
   const [accounts, setAccounts] = useState<ReturnType<typeof listAccounts>>([]);
 
   useEffect(() => {
@@ -151,7 +152,7 @@ export function ProfileTab() {
               name={p.name}
               src={p.photoUrl}
               size="xl"
-              verified={p.isAdmin}
+              verified={p.verified || p.isAdmin}
               className="ring-4 ring-surface"
             />
             <span className="absolute bottom-1 start-1 grid size-8 place-items-center rounded-full bg-primary text-primary-fg">
@@ -162,6 +163,11 @@ export function ProfileTab() {
           {p.isAdmin ? (
             <p className="mt-1 inline-flex items-center gap-1 rounded-full bg-primary/15 px-2.5 py-0.5 text-[11px] font-medium text-primary">
               <Shield className="size-3" />
+              المالك
+            </p>
+          ) : p.verified ? (
+            <p className="mt-1 inline-flex items-center gap-1 rounded-full bg-primary/15 px-2.5 py-0.5 text-[11px] font-medium text-primary">
+              <BadgeCheck className="size-3" />
               موثّق
             </p>
           ) : null}
@@ -173,6 +179,73 @@ export function ProfileTab() {
       <input ref={coverRef} type="file" accept="image/*" hidden onChange={(e) => void onPick("cover", e.target.files?.[0])} />
       <input ref={pubRef} type="file" accept="image/*" hidden onChange={(e) => void addTo("gallery", e.target.files?.[0])} />
       <input ref={privRef} type="file" accept="image/*" hidden onChange={(e) => void addTo("private", e.target.files?.[0])} />
+      <input
+        ref={storyRef}
+        type="file"
+        accept="image/*,video/*"
+        hidden
+        onChange={async (e) => {
+          const file = e.target.files?.[0];
+          if (!file) return;
+          try {
+            const url = await compressImage(file, 720);
+            await postStory.mutateAsync({ type: "image", fileUrl: url });
+            toast.success("نُشرت الحالة");
+          } catch {
+            toast.error("تعذر نشر الحالة");
+          }
+        }}
+      />
+
+      <div className="mt-5 grid grid-cols-2 gap-2">
+        <Button variant="secondary" onClick={() => storyRef.current?.click()}>
+          إضافة حالة
+        </Button>
+        {p.verified ? (
+          <Button variant="secondary" disabled>
+            <BadgeCheck className="size-4" />
+            موثّق
+          </Button>
+        ) : (
+          <Button
+            variant="secondary"
+            onClick={() => {
+              void askVerify.mutateAsync("طلب توثيق الحساب").then((res) => {
+                toast.success(res.already ? "طلبك قيد المراجعة" : "اترسل طلب التوثيق للمالك");
+              });
+            }}
+          >
+            <BadgeCheck className="size-4" />
+            طلب توثيق
+          </Button>
+        )}
+      </div>
+
+      <div className="mt-3 rounded-xl border border-border bg-surface p-3">
+        <p className="mb-2 flex items-center gap-2 text-sm font-medium">
+          <Mail className="size-4" />
+          تواصل مع الإدارة
+        </p>
+        <Textarea
+          value={mail}
+          onChange={(e) => setMail(e.target.value)}
+          placeholder="اكتب طلبك للمالك"
+          maxLength={500}
+        />
+        <Button
+          className="mt-2 w-full"
+          variant="secondary"
+          disabled={!mail.trim()}
+          onClick={() => {
+            void mailAdmin.mutateAsync(mail.trim()).then(() => {
+              setMail("");
+              toast.success("وصل طلبك للإدارة");
+            });
+          }}
+        >
+          إرسال للإدارة
+        </Button>
+      </div>
 
       <div className="mt-6 space-y-4">
         <div>
@@ -321,10 +394,6 @@ export function ProfileTab() {
             </ul>
           </section>
         ) : null}
-
-        <div className="mt-2">
-          <InstallBanner />
-        </div>
 
         <Button variant="outline" className="w-full" onClick={() => void out()}>
           <LogOut className="size-4" />

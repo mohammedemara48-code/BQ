@@ -1,9 +1,10 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { ArrowRight, Eye, Lock, Phone, Video } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { ArrowRight, Lock, Phone, Video } from "lucide-react";
+import { useEffect, useMemo, useRef } from "react";
 import { toast } from "sonner";
 import { Avatar } from "@/components/avatar";
 import { ChatComposer } from "@/components/chat-composer";
+import { DmBubble } from "@/components/message-bubble";
 import { RedirectToSignIn } from "@/lib/auth/gates";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import {
@@ -15,7 +16,6 @@ import {
   usePerson,
 } from "@/lib/bq/hooks";
 import type { MsgType } from "@/lib/bq/types";
-import { cn, formatDuration, formatTime } from "@/lib/utils";
 
 export const Route = createFileRoute("/chat/$peerId")({
   component: ChatPage,
@@ -29,9 +29,14 @@ function ChatPage() {
   const me = useMe();
   const remote = usePerson(peerId);
   const messages = useMessages(peerId);
-  const { send, reveal, askPrivate } = useBqMutations();
+  const { send, reveal, askPrivate, report } = useBqMutations();
   const scroller = useRef<HTMLDivElement>(null);
   const person = remote.data ?? findPerson(people.data, me.data, peerId);
+
+  const lastSeenId = useMemo(() => {
+    const mine = (messages.data ?? []).filter((m) => m.senderId === me.data?.userId && m.receipt === "seen");
+    return mine.at(-1)?.id;
+  }, [messages.data, me.data?.userId]);
 
   useEffect(() => {
     const el = scroller.current;
@@ -64,7 +69,7 @@ function ChatPage() {
             name={name}
             src={person?.photoUrl}
             online={person?.online}
-            verified={person?.isAdmin}
+            verified={person?.verified || person?.isAdmin}
             size="sm"
           />
           <span className="min-w-0">
@@ -110,49 +115,23 @@ function ChatPage() {
       <div ref={scroller} className="flex-1 space-y-2 overflow-y-auto px-3 py-4">
         {(messages.data ?? []).map((m) => {
           const mine = m.senderId === me.data?.userId;
-          const hidden = m.viewOnce && !m.opened && !mine;
           return (
-            <div key={m.id} className={cn("flex", mine ? "justify-start" : "justify-end")}>
-              <div
-                className={cn(
-                  "max-w-[78%] rounded-lg px-3 py-2 text-sm",
-                  mine
-                    ? "rounded-ss-sm bg-primary text-primary-fg"
-                    : "rounded-se-sm bg-elevated text-fg",
-                )}
-              >
-                {hidden ? (
-                  <button
-                    type="button"
-                    className="flex items-center gap-2"
-                    onClick={() => reveal.mutate(m.id)}
-                  >
-                    <Eye className="size-4" />
-                    عرض مرة واحدة
-                  </button>
-                ) : m.type === "image" && m.fileUrl ? (
-                  <img src={m.fileUrl} alt="" className="mb-1 max-h-56 rounded-md object-cover" />
-                ) : m.type === "video" && m.fileUrl ? (
-                  <video src={m.fileUrl} controls className="mb-1 max-h-56 rounded-md" />
-                ) : m.type === "voice" && m.fileUrl ? (
-                  <div className="flex items-center gap-2">
-                    <audio src={m.fileUrl} controls className="h-10 max-w-[200px]" />
-                    <span className="text-[10px] tabular-nums opacity-80">
-                      {formatDuration(m.durationSec)}
-                    </span>
-                  </div>
-                ) : m.type === "file" ? (
-                  <a href={m.fileUrl ?? "#"} download={m.text} className="underline">
-                    {m.text || "ملف"}
-                  </a>
-                ) : (
-                  <p className="whitespace-pre-wrap break-words">{m.text}</p>
-                )}
-                <p className={cn("mt-1 text-[10px]", mine ? "text-primary-fg/70" : "text-subtle")}>
-                  {formatTime(m.createdAt)}
-                </p>
-              </div>
-            </div>
+            <DmBubble
+              key={m.id}
+              message={m}
+              mine={mine}
+              lastSeen={m.id === lastSeenId}
+              onReveal={() => reveal.mutate(m.id)}
+              onReport={(reason) =>
+                report.mutate({
+                  userId: mine ? peerId : m.senderId,
+                  reason,
+                  kind: m.type === "text" ? "message" : "attachment",
+                  messageId: m.id,
+                  snippet: m.text.slice(0, 120),
+                })
+              }
+            />
           );
         })}
       </div>

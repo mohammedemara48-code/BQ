@@ -17,6 +17,7 @@ export type Profile = {
   online: boolean;
   isCommunity: boolean;
   isAdmin: boolean;
+  verified: boolean;
   role: Role;
   intent: Intent;
   phone: string;
@@ -42,9 +43,13 @@ export type ChatPreview = {
   lastSenderId: string;
   lastAt: string;
   unread: number;
+  lastDelivered: boolean;
+  lastSeen: boolean;
 };
 
 export type MsgType = "text" | "image" | "video" | "file" | "voice";
+
+export type Receipt = "sent" | "delivered" | "seen";
 
 export type Message = {
   id: number;
@@ -56,6 +61,9 @@ export type Message = {
   opened: boolean;
   durationSec: number;
   createdAt: string;
+  delivered: boolean;
+  seenAt: string | null;
+  receipt: Receipt;
 };
 
 export type ConnectRequest = {
@@ -82,5 +90,79 @@ export type Notice = {
   fromId: string;
   text: string;
   read: boolean;
+  createdAt: string;
+};
+
+export type Story = {
+  id: number;
+  userId: string;
+  type: string;
+  text: string;
+  fileUrl: string | null;
+  createdAt: string;
+};
+
+export type Room = {
+  id: number;
+  name: string;
+  topic: string;
+  photoUrl: string;
+  ownerId: string;
+  memberCount: number;
+  joined: boolean;
+  speakerOn: boolean;
+  lastText: string;
+  lastAt: string | null;
+};
+
+export type RoomMessage = {
+  id: number;
+  roomId: number;
+  senderId: string;
+  senderName: string;
+  senderPhoto: string;
+  type: string;
+  text: string;
+  fileUrl: string | null;
+  durationSec: number;
+  createdAt: string;
+  system: boolean;
+};
+
+export type ReportRow = {
+  id: number;
+  kind: string;
+  reporterId: string;
+  reporterName: string;
+  targetId: string;
+  targetName: string;
+  reason: string;
+  snippet: string;
+  messageId: number | null;
+  roomId: number | null;
+  roomMessageId: number | null;
+  peerA: string;
+  peerB: string;
+  status: string;
+  createdAt: string;
+};
+
+export type VerifyRequest = {
+  id: number;
+  userId: string;
+  name: string;
+  photoUrl: string;
+  note: string;
+  status: string;
+  createdAt: string;
+};
+
+export type AdminMail = {
+  id: number;
+  userId: string;
+  name: string;
+  photoUrl: string;
+  body: string;
+  status: string;
   createdAt: string;
 };

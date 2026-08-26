@@ -1,0 +1,178 @@
+import { Plus, X } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
+import { Avatar } from "@/components/avatar";
+import { Button } from "@/components/ui/button";
+import { useBqMutations, useMe, usePeople, useStories } from "@/lib/bq/hooks";
+import type { Story } from "@/lib/bq/types";
+import { compressImage, fileToDataUrl } from "@/lib/utils";
+
+export function StoriesTray() {
+  const stories = useStories();
+  const people = usePeople();
+  const me = useMe();
+  const { postStory } = useBqMutations();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [viewer, setViewer] = useState<Story[] | null>(null);
+  const [idx, setIdx] = useState(0);
+
+  const groups = useMemo(() => {
+    const by = new Map<string, Story[]>();
+    for (const s of stories.data ?? []) {
+      const list = by.get(s.userId) ?? [];
+      list.push(s);
+      by.set(s.userId, list);
+    }
+    return [...by.entries()];
+  }, [stories.data]);
+
+  const mine = groups.find(([id]) => id === me.data?.userId);
+  const others = groups.filter(([id]) => id !== me.data?.userId);
+  const byId = new Map((people.data ?? []).map((p) => [p.userId, p]));
+
+  async function add(file: File | undefined) {
+    if (!file) return;
+    try {
+      const isVideo = file.type.startsWith("video/");
+      const url = isVideo ? await fileToDataUrl(file) : await compressImage(file, 720);
+      await postStory.mutateAsync({ type: isVideo ? "video" : "image", fileUrl: url });
+      toast.success("نُشرت الحالة");
+    } catch {
+      toast.error("الملف أكبر من المسموح");
+    }
+  }
+
+  function open(list: Story[]) {
+    setViewer(list);
+    setIdx(0);
+  }
+
+  const current = viewer?.[idx];
+
+  return (
+    <section>
+      <h2 className="mb-3 text-sm font-medium text-muted">الحالات</h2>
+      <div className="-mx-4 flex gap-3 overflow-x-auto px-4 pb-1">
+        <button
+          type="button"
+          className="flex w-16 shrink-0 flex-col items-center gap-1.5"
+          onClick={() => fileRef.current?.click()}
+        >
+          <span className="relative">
+            <Avatar name={me.data?.name ?? "أنت"} src={me.data?.photoUrl} size="md" />
+            <span className="absolute -bottom-1 -end-1 grid size-5 place-items-center rounded-full bg-primary text-primary-fg ring-2 ring-bg">
+              <Plus className="size-3" />
+            </span>
+          </span>
+          <span className="w-full truncate text-center text-xs text-muted">حالتي</span>
+        </button>
+        {mine ? (
+          <StoryChip
+            name="أنت"
+            photo={me.data?.photoUrl}
+            onClick={() => open(mine[1])}
+            live
+          />
+        ) : null}
+        {others.map(([id, list]) => {
+          const p = byId.get(id);
+          return (
+            <StoryChip
+              key={id}
+              name={p?.name ?? "عضو"}
+              photo={p?.photoUrl}
+              onClick={() => open(list)}
+              live
+            />
+          );
+        })}
+      </div>
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/*,video/*"
+        hidden
+        onChange={(e) => void add(e.target.files?.[0])}
+      />
+
+      {current && viewer ? (
+        <div className="fixed inset-0 z-50 flex flex-col bg-bg">
+          <div className="flex gap-1 px-3 pt-3">
+            {viewer.map((s, i) => (
+              <span
+                key={s.id}
+                className="h-1 flex-1 rounded-full bg-elevated"
+              >
+                <span
+                  className="block h-full rounded-full bg-primary"
+                  style={{ width: i < idx ? "100%" : i === idx ? "100%" : "0%" }}
+                />
+              </span>
+            ))}
+          </div>
+          <div className="flex items-center justify-between px-3 py-2">
+            <p className="text-sm font-medium">
+              {current.userId === me.data?.userId
+                ? "حالتي"
+                : byId.get(current.userId)?.name ?? "حالة"}
+            </p>
+            <button
+              type="button"
+              className="grid size-11 place-items-center"
+              onClick={() => setViewer(null)}
+              aria-label="إغلاق"
+            >
+              <X className="size-5" />
+            </button>
+          </div>
+          <button
+            type="button"
+            className="flex flex-1 items-center justify-center px-4"
+            onClick={() => {
+              if (idx + 1 < viewer.length) setIdx(idx + 1);
+              else setViewer(null);
+            }}
+          >
+            {current.type === "video" && current.fileUrl ? (
+              <video src={current.fileUrl} autoPlay controls playsInline className="max-h-[70dvh] rounded-xl" />
+            ) : current.fileUrl ? (
+              <img src={current.fileUrl} alt="" className="max-h-[70dvh] rounded-xl object-contain" />
+            ) : (
+              <p className="font-display text-2xl">{current.text}</p>
+            )}
+          </button>
+          <div className="px-4 pb-8">
+            <Button className="w-full" variant="secondary" onClick={() => setViewer(null)}>
+              إغلاق
+            </Button>
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function StoryChip({
+  name,
+  photo,
+  onClick,
+  live,
+}: {
+  name: string;
+  photo?: string;
+  onClick: () => void;
+  live?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex w-16 shrink-0 flex-col items-center gap-1.5"
+    >
+      <span className={live ? "rounded-full bg-primary p-[2px]" : ""}>
+        <Avatar name={name} src={photo} size="md" />
+      </span>
+      <span className="w-full truncate text-center text-xs text-muted">{name}</span>
+    </button>
+  );
+}

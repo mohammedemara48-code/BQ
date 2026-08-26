@@ -1,6 +1,8 @@
 import { Link } from "@tanstack/react-router";
-import { MessageCircle } from "lucide-react";
+import { Check, CheckCheck, MessageCircle } from "lucide-react";
 import { Avatar } from "@/components/avatar";
+import { RoomsSection } from "@/components/rooms-section";
+import { StoriesTray } from "@/components/stories-tray";
 import { useChats, useMe, usePeople } from "@/lib/bq/hooks";
 import { formatTime } from "@/lib/utils";
 
@@ -13,6 +15,8 @@ export function ChatsTab() {
 
   return (
     <div className="bq-enter flex flex-col gap-5 px-4 pb-8 pt-2">
+      <StoriesTray />
+
       {online.length > 0 ? (
         <section>
           <h2 className="mb-3 text-sm font-medium text-muted">متصلون الآن</h2>
@@ -24,7 +28,7 @@ export function ChatsTab() {
                 params={{ peerId: p.userId }}
                 className="flex w-16 shrink-0 flex-col items-center gap-1.5"
               >
-                <Avatar name={p.name} src={p.photoUrl} online size="md" />
+                <Avatar name={p.name} src={p.photoUrl} online size="md" verified={p.verified} />
                 <span className="w-full truncate text-center text-xs text-muted">
                   {p.name}
                 </span>
@@ -33,6 +37,8 @@ export function ChatsTab() {
           </div>
         </section>
       ) : null}
+
+      <RoomsSection />
 
       <section>
         <h2 className="mb-2 text-sm font-medium text-muted">المحادثات</h2>
@@ -46,6 +52,7 @@ export function ChatsTab() {
           <div className="rounded-xl border border-border bg-surface px-5 py-10 text-center">
             <MessageCircle className="mx-auto mb-3 size-8 text-subtle" />
             <p className="font-medium">لا محادثات</p>
+            <p className="mt-1 text-sm text-muted">أضف صديق من تبويب الأشخاص</p>
           </div>
         ) : (
           <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-surface">
@@ -74,6 +81,7 @@ export function ChatsTab() {
                       name={name}
                       src={p?.photoUrl}
                       online={p?.online}
+                      verified={p?.verified}
                     />
                     <span className="min-w-0 flex-1">
                       <span className="flex items-center justify-between gap-2">
@@ -82,9 +90,25 @@ export function ChatsTab() {
                           {formatTime(c.lastAt)}
                         </span>
                       </span>
-                      <span className="mt-0.5 block truncate text-sm text-muted">
-                        {mine ? "أنت: " : ""}
-                        {preview}
+                      <span className="mt-0.5 flex items-center gap-1 truncate text-sm text-muted">
+                        {mine ? (
+                          c.lastSeen ? (
+                            <CheckCheck className="size-3.5 shrink-0 text-primary" />
+                          ) : c.lastDelivered ? (
+                            <CheckCheck className="size-3.5 shrink-0" />
+                          ) : (
+                            <Check className="size-3.5 shrink-0" />
+                          )
+                        ) : null}
+                        <span className="truncate">
+                          {mine ? "أنت: " : ""}
+                          {preview}
+                        </span>
+                        {c.unread > 0 ? (
+                          <span className="ms-auto grid min-w-5 place-items-center rounded-full bg-primary px-1.5 text-[10px] text-primary-fg">
+                            {c.unread}
+                          </span>
+                        ) : null}
                       </span>
                     </span>
                   </Link>

@@ -10,3 +10,5 @@ export type {
   ToolArgs,
 } from "./types.ts";
 export { isLoginRequired, redirectToLoginIfRequired } from "./login.ts";
+export { classifyCallToolError } from "./errors.ts";
+export type { CallToolErrorKind, CallToolErrorState } from "./errors.ts";

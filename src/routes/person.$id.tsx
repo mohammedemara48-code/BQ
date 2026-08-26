@@ -69,7 +69,7 @@ function PersonPage() {
           <img src={person.photoUrl} alt="" className="size-full object-cover object-top" />
         ) : (
           <div className="grid size-full place-items-center bg-elevated">
-            <Avatar name={person.name} size="xl" verified={person.isAdmin} />
+            <Avatar name={person.name} size="xl" verified={person.verified || person.isAdmin} />
           </div>
         )}
         <div className="absolute inset-0 bg-gradient-to-t from-bg via-transparent to-bg/40" />
@@ -84,7 +84,7 @@ function PersonPage() {
         <div className="absolute inset-x-0 bottom-0 px-5 pb-5">
           <h1 className="flex items-center gap-2 font-display text-3xl font-semibold">
             {person.name}
-            {person.isAdmin ? <BadgeCheck className="size-6 text-primary" /> : null}
+            {person.verified || person.isAdmin ? <BadgeCheck className="size-6 text-primary" /> : null}
           </h1>
           <p className="mt-1 text-sm text-muted">
             {[person.role, person.intent, person.city].filter(Boolean).join(" · ")}

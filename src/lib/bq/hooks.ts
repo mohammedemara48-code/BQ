@@ -15,7 +15,6 @@ import {
   markNoticesRead,
   openViewOnce,
   removeMember,
-  replyFromPeer,
   reportUser,
   requestPrivate,
   respondRequest,
@@ -24,7 +23,27 @@ import {
   unfriend,
   updateMe,
 } from "./server";
-import { COMMUNITY, isCommunityId } from "./community";
+import {
+  addStory,
+  adminListThread,
+  closeAdminMail,
+  contactAdmin,
+  createRoom,
+  decideVerify,
+  deleteStory,
+  joinRoom,
+  leaveRoom,
+  listAdminMail,
+  listAdminReports,
+  listRoomMessages,
+  listRooms,
+  listStories,
+  listVerifyRequests,
+  requestVerify,
+  resolveReport,
+  sendRoomMessage,
+  setRoomSpeaker,
+} from "./live";
 import type { MsgType, Profile } from "./types";
 
 export function useMe(enabled = true) {
@@ -91,6 +110,71 @@ export function useMessages(peerId: string) {
   });
 }
 
+export function useStories(enabled = true) {
+  return useQuery({
+    queryKey: ["stories"],
+    queryFn: () => listStories(),
+    refetchInterval: enabled ? 8000 : false,
+    enabled,
+  });
+}
+
+export function useRooms(enabled = true) {
+  return useQuery({
+    queryKey: ["rooms"],
+    queryFn: () => listRooms(),
+    refetchInterval: enabled ? 6000 : false,
+    enabled,
+  });
+}
+
+export function useRoomMessages(roomId: number, enabled = true) {
+  return useQuery({
+    queryKey: ["room-messages", roomId],
+    queryFn: () => listRoomMessages({ data: { roomId } }),
+    enabled: enabled && roomId > 0,
+    refetchInterval: enabled ? 2200 : false,
+  });
+}
+
+export function useAdminReports(enabled = false) {
+  return useQuery({
+    queryKey: ["admin-reports"],
+    queryFn: () => listAdminReports(),
+    enabled,
+    refetchInterval: enabled ? 8000 : false,
+  });
+}
+
+export function useVerifyRequests(enabled = false) {
+  return useQuery({
+    queryKey: ["verify-requests"],
+    queryFn: () => listVerifyRequests(),
+    enabled,
+    refetchInterval: enabled ? 8000 : false,
+  });
+}
+
+export function useAdminMail(enabled = false) {
+  return useQuery({
+    queryKey: ["admin-mail"],
+    queryFn: () => listAdminMail(),
+    enabled,
+    refetchInterval: enabled ? 8000 : false,
+  });
+}
+
+export function useAdminThread(
+  opts: { peerA?: string; peerB?: string; roomId?: number },
+  enabled = false,
+) {
+  return useQuery({
+    queryKey: ["admin-thread", opts],
+    queryFn: () => adminListThread({ data: opts }),
+    enabled,
+  });
+}
+
 type ProfilePatch = {
   name?: string;
   bio?: string;
@@ -122,6 +206,13 @@ export function useBqMutations() {
     void qc.invalidateQueries({ queryKey: ["members"] });
     void qc.invalidateQueries({ queryKey: ["notices"] });
     void qc.invalidateQueries({ queryKey: ["person"] });
+    void qc.invalidateQueries({ queryKey: ["stories"] });
+    void qc.invalidateQueries({ queryKey: ["rooms"] });
+    void qc.invalidateQueries({ queryKey: ["room-messages"] });
+    void qc.invalidateQueries({ queryKey: ["admin-reports"] });
+    void qc.invalidateQueries({ queryKey: ["verify-requests"] });
+    void qc.invalidateQueries({ queryKey: ["admin-mail"] });
+    void qc.invalidateQueries({ queryKey: ["admin-thread"] });
   };
 
   const send = useMutation({
@@ -146,14 +237,6 @@ export function useBqMutations() {
     onSuccess: async (_res, vars) => {
       await qc.invalidateQueries({ queryKey: ["messages", vars.peerId] });
       await qc.invalidateQueries({ queryKey: ["chats"] });
-      if (isCommunityId(vars.peerId) && vars.type === "text") {
-        window.setTimeout(() => {
-          void replyFromPeer({ data: { peerId: vars.peerId } }).then(() => {
-            void qc.invalidateQueries({ queryKey: ["messages", vars.peerId] });
-            void qc.invalidateQueries({ queryKey: ["chats"] });
-          });
-        }, 900);
-      }
     },
   });
 
@@ -213,8 +296,15 @@ export function useBqMutations() {
   });
 
   const report = useMutation({
-    mutationFn: (input: { userId: string; reason: string }) =>
-      reportUser({ data: input }),
+    mutationFn: (input: {
+      userId: string;
+      reason: string;
+      kind?: "user" | "message" | "room" | "attachment";
+      messageId?: number;
+      roomId?: number;
+      roomMessageId?: number;
+      snippet?: string;
+    }) => reportUser({ data: input }),
     onSuccess: invalidateAll,
   });
 
@@ -234,6 +324,86 @@ export function useBqMutations() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["notices"] }),
   });
 
+  const postStory = useMutation({
+    mutationFn: (input: { type: "image" | "video" | "text"; text?: string; fileUrl?: string | null }) =>
+      addStory({ data: input }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["stories"] }),
+  });
+
+  const dropStory = useMutation({
+    mutationFn: (id: number) => deleteStory({ data: { id } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["stories"] }),
+  });
+
+  const makeRoom = useMutation({
+    mutationFn: (input: { name: string; topic?: string }) => createRoom({ data: input }),
+    onSuccess: invalidateAll,
+  });
+
+  const enterRoom = useMutation({
+    mutationFn: (roomId: number) => joinRoom({ data: { roomId } }),
+    onSuccess: invalidateAll,
+  });
+
+  const exitRoom = useMutation({
+    mutationFn: (roomId: number) => leaveRoom({ data: { roomId } }),
+    onSuccess: invalidateAll,
+  });
+
+  const speaker = useMutation({
+    mutationFn: (input: { roomId: number; on: boolean }) => setRoomSpeaker({ data: input }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["rooms"] }),
+  });
+
+  const sendRoom = useMutation({
+    mutationFn: (input: {
+      roomId: number;
+      text: string;
+      type?: MsgType;
+      fileUrl?: string | null;
+      durationSec?: number;
+    }) =>
+      sendRoomMessage({
+        data: {
+          roomId: input.roomId,
+          text: input.text,
+          type: input.type ?? "text",
+          fileUrl: input.fileUrl,
+          durationSec: input.durationSec,
+        },
+      }),
+    onSuccess: async (_r, vars) => {
+      await qc.invalidateQueries({ queryKey: ["room-messages", vars.roomId] });
+      await qc.invalidateQueries({ queryKey: ["rooms"] });
+    },
+  });
+
+  const askVerify = useMutation({
+    mutationFn: (note?: string) => requestVerify({ data: { note } }),
+    onSuccess: invalidateAll,
+  });
+
+  const mailAdmin = useMutation({
+    mutationFn: (body: string) => contactAdmin({ data: { body } }),
+    onSuccess: invalidateAll,
+  });
+
+  const decideV = useMutation({
+    mutationFn: (input: { id: number; accept: boolean }) => decideVerify({ data: input }),
+    onSuccess: invalidateAll,
+  });
+
+  const closeMail = useMutation({
+    mutationFn: (id: number) => closeAdminMail({ data: { id } }),
+    onSuccess: invalidateAll,
+  });
+
+  const closeReport = useMutation({
+    mutationFn: (input: { id: number; action: "dismiss" | "delete_message" | "remove_user" }) =>
+      resolveReport({ data: input }),
+    onSuccess: invalidateAll,
+  });
+
   return {
     send,
     request,
@@ -248,6 +418,18 @@ export function useBqMutations() {
     askPrivate,
     allowPrivate,
     readNotices,
+    postStory,
+    dropStory,
+    makeRoom,
+    enterRoom,
+    exitRoom,
+    speaker,
+    sendRoom,
+    askVerify,
+    mailAdmin,
+    decideV,
+    closeMail,
+    closeReport,
   };
 }
 
@@ -257,31 +439,5 @@ export function findPerson(
   id: string,
 ): Profile | undefined {
   if (me && me.userId === id) return me;
-  const hit = people?.find((p) => p.userId === id);
-  if (hit) return hit;
-  const seed = COMMUNITY.find((p) => p.id === id);
-  if (!seed) return undefined;
-  return {
-    userId: seed.id,
-    name: seed.name,
-    bio: seed.bio,
-    pronouns: seed.pronouns,
-    city: seed.city,
-    lookingFor: seed.lookingFor,
-    interests: seed.interests,
-    photoUrl: seed.photoUrl,
-    coverUrl: "",
-    online: seed.online,
-    isCommunity: true,
-    isAdmin: false,
-    role: seed.role,
-    intent: seed.intent,
-    phone: "",
-    showOnMap: true,
-    gallery: seed.photoUrl ? [seed.photoUrl] : [],
-    privateGallery: [],
-    hasPrivate: seed.hasPrivatePhotos,
-    privateGranted: false,
-    distanceKm: null,
-  };
+  return people?.find((p) => p.userId === id);
 }

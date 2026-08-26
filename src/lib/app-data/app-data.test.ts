@@ -4,9 +4,15 @@ import { callTool, failureMemoSize } from "./client.server.ts";
 import { ConnectorType } from "./types.ts";
 import type { ToolArgs } from "./types.ts";
 import { isLoginRequired, redirectToLoginIfRequired } from "./login.ts";
+import { classifyCallToolError } from "./errors.ts";
 import type { CallToolResult } from "./types.ts";
 
-type WindowStub = { location: { assign: (url: string) => void; href: string } };
+type WindowStub = {
+  location: { assign: (url: string) => void; href: string };
+  self?: unknown;
+  top?: unknown;
+  open?: (url: string, target: string) => unknown;
+};
 
 function withWindow<T>(stub: WindowStub, fn: () => T): T {
   (globalThis as { window?: unknown }).window = stub;
@@ -226,6 +232,65 @@ describe("redirectToLoginIfRequired", () => {
     assert.equal(target, "https://gate.grok.me/__gate/signin?return_to=x");
   });
 
+  it("opens a new tab instead of navigating when framed", () => {
+    let assigned = "";
+    let opened = "";
+    const openedTab: { opener?: unknown } = { opener: "parent" };
+    const did = withWindow(
+      {
+        self: "frame",
+        top: "host",
+        open: (url) => {
+          opened = url;
+          return openedTab;
+        },
+        location: {
+          assign: (u) => {
+            assigned = u;
+          },
+          href: "https://my-app.grok.me/current",
+        },
+      },
+      () =>
+        redirectToLoginIfRequired({
+          ok: false,
+          data: null,
+          loginRequired: true,
+          loginUrl: "https://gate.grok.me/__gate/signin?return_to=x",
+        }),
+    );
+    assert.equal(did, true);
+    assert.equal(opened, "https://gate.grok.me/__gate/signin?return_to=x");
+    assert.equal(openedTab.opener, null);
+    assert.equal(assigned, "");
+  });
+
+  it("falls back to navigation when framed and the popup is blocked", () => {
+    let assigned = "";
+    const did = withWindow(
+      {
+        self: "frame",
+        top: "host",
+        open: () => null,
+        location: {
+          assign: (u) => {
+            assigned = u;
+          },
+          href: "https://my-app.grok.me/current",
+        },
+      },
+      () =>
+        redirectToLoginIfRequired({
+          ok: false,
+          data: null,
+          loginRequired: true,
+          loginUrl: "https://gate.grok.me/__gate/signin?return_to=x",
+        }),
+    );
+    assert.equal(did, true);
+    assert.equal(assigned, "https://gate.grok.me/__gate/signin?return_to=x");
+  });
+
   it("returns false when the result has no loginUrl", () => {
     let target = "";
     const did = withWindow(
@@ -252,5 +317,77 @@ describe("redirectToLoginIfRequired", () => {
       loginUrl: "https://gate.grok.me/__gate/signin?return_to=x",
     });
     assert.equal(did, false);
+  });
+});
+
+describe("classifyCallToolError", () => {
+  it("returns null for successful results", () => {
+    assert.equal(classifyCallToolError({ ok: true, data: {} }), null);
+  });
+
+  it("classifies login-required before message matching", () => {
+    const state = classifyCallToolError({
+      ok: false,
+      data: null,
+      loginRequired: true,
+      errorMessage: "missing_connector_token",
+    });
+    assert.equal(state?.kind, "login");
+    assert.equal(state?.detail, "missing_connector_token");
+  });
+
+  it("classifies not_connected and failed_precondition", () => {
+    assert.equal(
+      classifyCallToolError({
+        ok: false,
+        data: null,
+        errorMessage: "connector_not_connected: Notion",
+      })?.kind,
+      "not_connected",
+    );
+    assert.equal(
+      classifyCallToolError({
+        ok: false,
+        data: null,
+        errorMessage: "FAILED_PRECONDITION: no connector",
+      })?.kind,
+      "not_connected",
+    );
+  });
+
+  it("classifies scope_denied without claiming a missing grant", () => {
+    const state = classifyCallToolError({
+      ok: false,
+      data: null,
+      errorMessage: "scope_denied: tool notion-list-recent-pages not in grant scopes",
+    });
+    assert.equal(state?.kind, "scope_denied");
+    assert.match(state?.message ?? "", /tool outside its grant/);
+    assert.match(state?.detail ?? "", /notion-list-recent-pages/);
+  });
+
+  it("classifies access_denied", () => {
+    assert.equal(
+      classifyCallToolError({
+        ok: false,
+        data: null,
+        errorMessage: "access_denied",
+      })?.kind,
+      "access_denied",
+    );
+  });
+
+  it("falls back to a generic error with the raw message", () => {
+    const state = classifyCallToolError({
+      ok: false,
+      data: null,
+      errorMessage: "boom",
+    });
+    assert.equal(state?.kind, "error");
+    assert.equal(state?.message, "boom");
+    const empty = classifyCallToolError({ ok: false, data: null });
+    assert.equal(empty?.kind, "error");
+    assert.equal(empty?.message, "Something went wrong. Try again.");
+    assert.equal(empty?.detail, undefined);
   });
 });

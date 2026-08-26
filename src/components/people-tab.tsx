@@ -181,7 +181,7 @@ function FeaturedCard({
               <div>
                 <h3 className="flex items-center gap-1.5 font-display text-2xl font-semibold">
                   {person.name}
-                  {person.isAdmin ? <BadgeCheck className="size-5 text-primary" /> : null}
+                  {person.verified || person.isAdmin ? <BadgeCheck className="size-5 text-primary" /> : null}
                 </h3>
                 <p className="text-sm text-muted">{meta(person)}</p>
                 {person.distanceKm != null ? (
@@ -236,7 +236,7 @@ function PersonCard({
             <img src={person.photoUrl} alt="" className="size-full object-cover object-top" />
           ) : (
             <div className="grid size-full place-items-center bg-elevated">
-              <Avatar name={person.name} size="lg" verified={person.isAdmin} />
+              <Avatar name={person.name} size="lg" verified={person.verified || person.isAdmin} />
             </div>
           )}
           {person.online ? (
@@ -246,7 +246,7 @@ function PersonCard({
         <div className="px-3 pt-2.5">
           <h3 className="flex items-center gap-1 truncate font-medium">
             {person.name}
-            {person.isAdmin ? <BadgeCheck className="size-3.5 shrink-0 text-primary" /> : null}
+            {person.verified || person.isAdmin ? <BadgeCheck className="size-3.5 shrink-0 text-primary" /> : null}
           </h3>
           <p className="truncate text-xs text-muted">
             {person.role || person.intent || person.city}

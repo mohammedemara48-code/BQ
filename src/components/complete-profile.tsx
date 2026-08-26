@@ -2,6 +2,7 @@ import { MapPin } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { BqMark } from "@/components/bq-mark";
+import { InstallDock } from "@/components/pwa-register";
 import { Button } from "@/components/ui/button";
 import { Input, Label, Textarea } from "@/components/ui/input";
 import { useBqMutations, useMe } from "@/lib/bq/hooks";
@@ -80,6 +81,10 @@ export function CompleteProfile() {
       <div className="mb-6 flex flex-col items-center text-center">
         <BqMark className="size-14" />
         <h1 className="mt-4 font-display text-2xl font-semibold">ملفك</h1>
+      </div>
+
+      <div className="mb-5">
+        <InstallDock />
       </div>
 
       <div className="space-y-5">

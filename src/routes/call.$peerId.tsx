@@ -5,6 +5,7 @@ import { Avatar } from "@/components/avatar";
 import { RedirectToSignIn } from "@/lib/auth/gates";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { findPerson, useBqMutations, useMe, usePeople } from "@/lib/bq/hooks";
+import { startRingtone } from "@/lib/bq/ringtone";
 import { cn, formatDuration } from "@/lib/utils";
 
 export const Route = createFileRoute("/call/$peerId")({
@@ -25,17 +26,31 @@ function CallPage() {
   const person = findPerson(people.data, me.data, peerId);
   const [phase, setPhase] = useState<"ring" | "live">("ring");
   const [muted, setMuted] = useState(false);
-  const [camOff, setCamOff] = useState(kind === "audio");
+  const [camOff, setCamOff] = useState(kind !== "video");
   const [speaker, setSpeaker] = useState(kind === "video");
   const [seconds, setSeconds] = useState(0);
+  const [camError, setCamError] = useState("");
   const liveAt = useRef<number | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const hung = useRef(false);
+
+  function backToChat() {
+    void navigate({ to: "/chat/$peerId", params: { peerId } });
+  }
 
   useEffect(() => {
+    const stopRing = startRingtone();
     const t = window.setTimeout(() => {
+      stopRing();
+      if (hung.current) return;
       setPhase("live");
       liveAt.current = Date.now();
-    }, 1800);
-    return () => window.clearTimeout(t);
+    }, 2400);
+    return () => {
+      stopRing();
+      window.clearTimeout(t);
+    };
   }, []);
 
   useEffect(() => {
@@ -44,12 +59,52 @@ function CallPage() {
     return () => window.clearInterval(t);
   }, [phase]);
 
+  useEffect(() => {
+    if (kind !== "video" || camOff) {
+      streamRef.current?.getTracks().forEach((tr) => tr.stop());
+      streamRef.current = null;
+      if (videoRef.current) videoRef.current.srcObject = null;
+      return;
+    }
+    let gone = false;
+    void navigator.mediaDevices
+      .getUserMedia({ video: { facingMode: "user" }, audio: true })
+      .then((stream) => {
+        if (gone) {
+          stream.getTracks().forEach((tr) => tr.stop());
+          return;
+        }
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          void videoRef.current.play();
+        }
+        stream.getAudioTracks().forEach((tr) => {
+          tr.enabled = !muted;
+        });
+      })
+      .catch(() => setCamError("اسمح للكاميرا من إعدادات المتصفح"));
+    return () => {
+      gone = true;
+      streamRef.current?.getTracks().forEach((tr) => tr.stop());
+      streamRef.current = null;
+    };
+  }, [kind, camOff, muted]);
+
+  useEffect(() => {
+    streamRef.current?.getAudioTracks().forEach((tr) => {
+      tr.enabled = !muted;
+    });
+  }, [muted]);
+
   function hang() {
+    hung.current = true;
+    streamRef.current?.getTracks().forEach((tr) => tr.stop());
     const dur = liveAt.current
       ? Math.max(1, Math.round((Date.now() - liveAt.current) / 1000))
       : 0;
     void recordCall.mutateAsync({ peerId, kind, durationSec: dur }).finally(() => {
-      void navigate({ to: "/", search: { tab: "calls" } });
+      backToChat();
     });
   }
 
@@ -60,13 +115,22 @@ function CallPage() {
 
   return (
     <div className="relative mx-auto flex min-h-dvh w-full max-w-lg flex-col items-center justify-between overflow-hidden bg-bg px-6 py-10">
-      {person?.photoUrl ? (
+      {kind === "video" && !camOff ? (
+        <video
+          ref={videoRef}
+          muted={!speaker}
+          playsInline
+          autoPlay
+          className="absolute inset-0 size-full object-cover"
+        />
+      ) : person?.photoUrl ? (
         <img
           src={person.photoUrl}
           alt=""
           className="pointer-events-none absolute inset-0 size-full object-cover object-center opacity-25 blur-2xl"
         />
       ) : null}
+      <div className="absolute inset-0 bg-bg/40" />
       <div className="relative z-10 mt-8 flex flex-col items-center">
         <div className="relative">
           {phase === "ring" ? (
@@ -75,15 +139,20 @@ function CallPage() {
               <span className="absolute inset-0 rounded-full bg-accent/20 [animation:pulse-ring_1.6s_ease-out_infinite_0.4s]" />
             </>
           ) : null}
-          <Avatar name={name} src={person?.photoUrl} size="hero" verified={person?.isAdmin} />
+          <Avatar name={name} src={person?.photoUrl} size="hero" verified={person?.verified || person?.isAdmin} />
         </div>
         <h1 className="mt-5 font-display text-2xl font-semibold">{name}</h1>
         <p className="mt-1 text-sm text-muted tabular-nums">
-          {phase === "ring" ? (kind === "video" ? "فيديو…" : "اتصال…") : formatDuration(seconds)}
+          {phase === "ring"
+            ? kind === "video"
+              ? "رنين فيديو…"
+              : "رنين…"
+            : formatDuration(seconds)}
         </p>
         <p className="mt-1 text-xs text-subtle">
-          {speaker ? "مكبر الصوت" : "سماعة الأذن"}
+          {speaker ? "مكبر الصوت شغال" : "سماعة الأذن"}
         </p>
+        {camError ? <p className="mt-2 text-xs text-danger">{camError}</p> : null}
       </div>
 
       <div className="relative z-10 mb-6 flex items-center gap-4">

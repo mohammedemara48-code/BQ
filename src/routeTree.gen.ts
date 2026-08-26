@@ -13,7 +13,9 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as CallPeerIdRouteImport } from './routes/call.$peerId'
 import { Route as ChatPeerIdRouteImport } from './routes/chat.$peerId'
+import { Route as ModThreadRouteImport } from './routes/mod.thread'
 import { Route as PersonIdRouteImport } from './routes/person.$id'
+import { Route as RoomRoomIdRouteImport } from './routes/room.$roomId'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 
 const IndexRoute = IndexRouteImport.update({
@@ -36,9 +38,19 @@ const ChatPeerIdRoute = ChatPeerIdRouteImport.update({
   path: '/chat/$peerId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ModThreadRoute = ModThreadRouteImport.update({
+  id: '/mod/thread',
+  path: '/mod/thread',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const PersonIdRoute = PersonIdRouteImport.update({
   id: '/person/$id',
   path: '/person/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RoomRoomIdRoute = RoomRoomIdRouteImport.update({
+  id: '/room/$roomId',
+  path: '/room/$roomId',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
@@ -52,7 +64,9 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/call/$peerId': typeof CallPeerIdRoute
   '/chat/$peerId': typeof ChatPeerIdRoute
+  '/mod/thread': typeof ModThreadRoute
   '/person/$id': typeof PersonIdRoute
+  '/room/$roomId': typeof RoomRoomIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
 }
 export interface FileRoutesByTo {
@@ -60,7 +74,9 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/call/$peerId': typeof CallPeerIdRoute
   '/chat/$peerId': typeof ChatPeerIdRoute
+  '/mod/thread': typeof ModThreadRoute
   '/person/$id': typeof PersonIdRoute
+  '/room/$roomId': typeof RoomRoomIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
 }
 export interface FileRoutesById {
@@ -69,7 +85,9 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/call/$peerId': typeof CallPeerIdRoute
   '/chat/$peerId': typeof ChatPeerIdRoute
+  '/mod/thread': typeof ModThreadRoute
   '/person/$id': typeof PersonIdRoute
+  '/room/$roomId': typeof RoomRoomIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
 }
 export interface FileRouteTypes {
@@ -79,7 +97,9 @@ export interface FileRouteTypes {
     | '/login'
     | '/call/$peerId'
     | '/chat/$peerId'
+    | '/mod/thread'
     | '/person/$id'
+    | '/room/$roomId'
     | '/api/auth/$'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -87,7 +107,9 @@ export interface FileRouteTypes {
     | '/login'
     | '/call/$peerId'
     | '/chat/$peerId'
+    | '/mod/thread'
     | '/person/$id'
+    | '/room/$roomId'
     | '/api/auth/$'
   id:
     | '__root__'
@@ -95,7 +117,9 @@ export interface FileRouteTypes {
     | '/login'
     | '/call/$peerId'
     | '/chat/$peerId'
+    | '/mod/thread'
     | '/person/$id'
+    | '/room/$roomId'
     | '/api/auth/$'
   fileRoutesById: FileRoutesById
 }
@@ -104,7 +128,9 @@ export interface RootRouteChildren {
   LoginRoute: typeof LoginRoute
   CallPeerIdRoute: typeof CallPeerIdRoute
   ChatPeerIdRoute: typeof ChatPeerIdRoute
+  ModThreadRoute: typeof ModThreadRoute
   PersonIdRoute: typeof PersonIdRoute
+  RoomRoomIdRoute: typeof RoomRoomIdRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
 }
 
@@ -138,11 +164,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatPeerIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/mod/thread': {
+      id: '/mod/thread'
+      path: '/mod/thread'
+      fullPath: '/mod/thread'
+      preLoaderRoute: typeof ModThreadRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/person/$id': {
       id: '/person/$id'
       path: '/person/$id'
       fullPath: '/person/$id'
       preLoaderRoute: typeof PersonIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/room/$roomId': {
+      id: '/room/$roomId'
+      path: '/room/$roomId'
+      fullPath: '/room/$roomId'
+      preLoaderRoute: typeof RoomRoomIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/auth/$': {
@@ -160,7 +200,9 @@ const rootRouteChildren: RootRouteChildren = {
   LoginRoute: LoginRoute,
   CallPeerIdRoute: CallPeerIdRoute,
   ChatPeerIdRoute: ChatPeerIdRoute,
+  ModThreadRoute: ModThreadRoute,
   PersonIdRoute: PersonIdRoute,
+  RoomRoomIdRoute: RoomRoomIdRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
 }
 export const routeTree = rootRouteImport
