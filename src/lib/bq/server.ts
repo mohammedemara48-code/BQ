@@ -140,6 +140,31 @@ export async function notify(userId: string, kind: string, fromId: string, text:
     insert into notifications (user_id, kind, from_id, text)
     values (${userId}, ${kind}, ${fromId}, ${text})
   `;
+  const url =
+    kind === "call"
+      ? "/?incoming=1"
+      : kind === "request" || kind === "accepted"
+        ? "/?tab=people"
+        : kind === "mail" || kind === "verify" || kind === "report"
+          ? "/?tab=admin"
+          : `/chat/${fromId}`;
+  const title =
+    kind === "call" ? "مكالمة" : kind === "request" ? "طلب متابعة" : kind === "accepted" ? "BQ" : "رسالة جديدة";
+  try {
+    const { sendPushToUser } = await import("./push.server");
+    await Promise.race([
+      sendPushToUser(userId, {
+        title,
+        body: text,
+        url,
+        tag: `${kind}:${fromId}`,
+        kind,
+      }),
+      new Promise<void>((resolve) => setTimeout(resolve, 4000)),
+    ]);
+  } catch {
+    /* push best-effort */
+  }
 }
 
 export async function notifyAdmins(kind: string, fromId: string, text: string) {
@@ -368,6 +393,11 @@ export const listChats = createServerFn({ method: "GET" })
   .handler(async ({ context }) => {
     const sql = await getSql();
     const me = context.userId;
+    await sql`
+      update messages set delivered = true
+      where (user_a = ${me} or user_b = ${me})
+        and sender_id <> ${me} and delivered = false
+    `;
     const rows = await sql<{
       peer_id: string;
       text: string;
@@ -425,12 +455,7 @@ export const listMessages = createServerFn({ method: "GET" })
     const sql = await getSql();
     const me = context.userId;
     await sql`
-      update messages set delivered = true
-      where user_a = ${a} and user_b = ${b}
-        and sender_id <> ${me} and delivered = false
-    `;
-    await sql`
-      update messages set seen_at = now()
+      update messages set delivered = true, seen_at = coalesce(seen_at, now())
       where user_a = ${a} and user_b = ${b}
         and sender_id <> ${me} and seen_at is null
     `;
@@ -500,6 +525,18 @@ export const sendMessage = createServerFn({ method: "POST" })
       )
     `;
     await allowThread(context.userId, data.peerId);
+    const me = await ensureMe(context.userId);
+    const preview =
+      data.type === "image"
+        ? "صورة"
+        : data.type === "video"
+          ? "فيديو"
+          : data.type === "voice"
+            ? "رسالة صوتية"
+            : data.type === "file"
+              ? "ملف"
+              : text.slice(0, 80);
+    await notify(data.peerId, "message", context.userId, `${me.name}: ${preview}`);
     return { ok: true as const };
   });
 

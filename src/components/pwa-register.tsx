@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Download, MoreVertical, X } from "lucide-react";
+import { Bell, Download, MoreVertical, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   captureInstallPrompt,
@@ -9,19 +9,78 @@ import {
   promptInstall,
   subscribeInstallPrompt,
 } from "@/lib/bq/pwa";
+import { useCurrentUserState } from "@/lib/auth/use-current-user";
+import { enablePush, pushPermission } from "@/lib/bq/push";
+import { savePushSubscription } from "@/lib/bq/push-live";
 
 captureInstallPrompt();
 
 const ICON = "/icons/icon-192.png";
 
 export function PwaRegister() {
+  const { user } = useCurrentUserState();
   useEffect(() => {
     if (!("serviceWorker" in navigator)) return;
     void navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {
       /* ignore */
     });
   }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    const save = () =>
+      enablePush((input) => savePushSubscription({ data: input })).catch(() => undefined);
+    if (pushPermission() === "granted") void save();
+    const onTap = () => {
+      const p = pushPermission();
+      if (p === "default" || p === "granted") void save();
+    };
+    document.addEventListener("pointerdown", onTap, true);
+    return () => document.removeEventListener("pointerdown", onTap, true);
+  }, [user?.id]);
+
   return null;
+}
+
+export function PushBanner() {
+  const { user } = useCurrentUserState();
+  const [perm, setPerm] = useState<"default" | "granted" | "denied" | "unsupported" | "hide">("hide");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!user) {
+      setPerm("hide");
+      return;
+    }
+    const p = pushPermission();
+    setPerm(p === "granted" || p === "unsupported" ? "hide" : p);
+  }, [user?.id]);
+  if (perm === "hide" || perm === "granted" || perm === "unsupported" || perm === "denied") return null;
+
+  async function on() {
+    setBusy(true);
+    const res = await enablePush((input) => savePushSubscription({ data: input })).catch(() => "denied" as const);
+    setBusy(false);
+    setPerm(res === "granted" ? "hide" : res);
+  }
+
+  return (
+    <div className="mx-4 mt-3">
+      <button
+        type="button"
+        onClick={() => void on()}
+        disabled={busy}
+        className="flex w-full items-center gap-3 rounded-lg border border-primary/30 bg-elevated px-3 py-3 text-start"
+      >
+        <span className="grid size-10 place-items-center rounded-full bg-primary/15 text-primary">
+          <Bell className="size-5" />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm font-medium">فعّل التنبيهات دلوقتي</span>
+          <span className="block text-xs text-muted">من غير كده المكالمات والرسائل مش هتوصل والتطبيق مقفول</span>
+        </span>
+      </button>
+    </div>
+  );
 }
 
 export function useCanInstall() {

@@ -11,7 +11,7 @@ import { MapTab } from "@/components/map-tab";
 import { NoticeBell } from "@/components/notice-bell";
 import { PeopleTab } from "@/components/people-tab";
 import { ProfileTab } from "@/components/profile-tab";
-import { AndroidInstallPage, InstallDock } from "@/components/pwa-register";
+import { AndroidInstallPage, InstallDock, PushBanner } from "@/components/pwa-register";
 import { Button } from "@/components/ui/button";
 import { rememberAccount, hasBearerToken } from "@/lib/bq/accounts";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
@@ -143,6 +143,7 @@ function Home() {
         </div>
       </header>
       <InstallDock />
+      <PushBanner />
       <IncomingBanner />
       <main className="flex-1 pb-24">
         {tab === "chats" ? <ChatsTab /> : null}

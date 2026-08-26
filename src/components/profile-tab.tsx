@@ -417,6 +417,7 @@ export function ProfileTab() {
           </section>
         ) : null}
 
+        <p className="text-center text-[11px] text-subtle">نسخة ٢٦ أغسطس · مكالمات وإيصالات</p>
         <Button variant="outline" className="w-full" onClick={() => void out()}>
           <LogOut className="size-4" />
           تسجيل الخروج

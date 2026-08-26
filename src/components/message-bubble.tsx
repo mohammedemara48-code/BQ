@@ -9,16 +9,26 @@ export const REPORT_REASONS = ["مزعج", "محتوى غير لائق", "تحر
 export function ReceiptMarks({ receipt, seenLabel }: { receipt: Receipt; seenLabel?: boolean }) {
   if (receipt === "seen") {
     return (
-      <span className="inline-flex items-center gap-1">
-        <CheckCheck className="size-3.5 text-primary-fg" />
-        {seenLabel ? <span>تم المشاهدة</span> : null}
+      <span className="inline-flex items-center gap-0.5 font-semibold text-accent">
+        <CheckCheck className="size-4" />
+        اتقريت
       </span>
     );
   }
   if (receipt === "delivered") {
-    return <CheckCheck className="size-3.5 opacity-80" />;
+    return (
+      <span className="inline-flex items-center gap-0.5 font-medium">
+        <CheckCheck className="size-4" />
+        وصلت
+      </span>
+    );
   }
-  return <Check className="size-3.5 opacity-70" />;
+  return (
+    <span className="inline-flex items-center gap-0.5 font-medium opacity-90">
+      <Check className="size-4" />
+      اتبعتت
+    </span>
+  );
 }
 
 export function MessageBody({
