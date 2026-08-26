@@ -72,7 +72,7 @@ async function expireStale() {
     update live_calls
     set status = 'missed', ended_at = now()
     where status = 'ringing'
-      and created_at < now() - interval '70 seconds'
+      and created_at < now() - interval '45 seconds'
     returning id, caller_id, callee_id, kind
   `;
   for (const row of missed) {
@@ -135,18 +135,28 @@ export const placeCall = createServerFn({ method: "POST" })
     `;
     if ((peer[0]?.n ?? 0) === 0) return { ok: false as const, reason: "missing" };
     await expireStale();
-    const busy = await sql<{ n: number }>`
-      select count(*)::int as n from live_calls
+    // Always free this exact pair so a leftover ringing row cannot block redial.
+    await sql`
+      update live_calls
+      set status = 'ended', ended_at = now(), ended_by = ${context.userId}
       where status in ('ringing', 'live')
-        and (caller_id = ${data.peerId} or callee_id = ${data.peerId})
+        and (
+          (caller_id = ${context.userId} and callee_id = ${data.peerId})
+          or (caller_id = ${data.peerId} and callee_id = ${context.userId})
+        )
     `;
-    if ((busy[0]?.n ?? 0) > 0) return { ok: false as const, reason: "busy" };
     await sql`
       update live_calls
       set status = 'ended', ended_at = now(), ended_by = ${context.userId}
       where status in ('ringing', 'live')
         and (caller_id = ${context.userId} or callee_id = ${context.userId})
     `;
+    const busy = await sql<{ n: number }>`
+      select count(*)::int as n from live_calls
+      where status in ('ringing', 'live')
+        and (caller_id = ${data.peerId} or callee_id = ${data.peerId})
+    `;
+    if ((busy[0]?.n ?? 0) > 0) return { ok: false as const, reason: "busy" };
     const inserted = await sql<{ id: number }>`
       insert into live_calls (caller_id, callee_id, kind, status)
       values (${context.userId}, ${data.peerId}, ${data.kind}, ${"ringing"})

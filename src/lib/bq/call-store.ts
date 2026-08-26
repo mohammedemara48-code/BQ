@@ -133,7 +133,6 @@ export const useCallStore = create<CallState>((set, get) => ({
   },
   incoming: (input) => {
     const cur = get();
-    if (cur.ignoreIncoming) return;
     if (wasCallEnded(input.callId)) return;
     if (cur.active && cur.callId === input.callId) return;
     if (cur.active) return;

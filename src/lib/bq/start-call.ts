@@ -32,7 +32,10 @@ export async function beginOutgoingCall(input: {
   kind: CallKind;
 }): Promise<boolean> {
   const cur = useCallStore.getState();
-  if (cur.active) return false;
+  if (cur.active) {
+    // A leftover UI session must not silently swallow the tap.
+    useCallStore.getState().hang();
+  }
   let stream: MediaStream | null = null;
   try {
     stream = await acquireMedia(input.kind === "video");
@@ -49,7 +52,12 @@ export async function beginOutgoingCall(input: {
   });
   useCallStore.getState().setPreStream(stream);
   try {
-    const res = await placeCall({ data: { peerId: input.peerId, kind: input.kind } });
+    const res = await Promise.race([
+      placeCall({ data: { peerId: input.peerId, kind: input.kind } }),
+      new Promise<never>((_, reject) => {
+        window.setTimeout(() => reject(new Error("timeout")), 12_000);
+      }),
+    ]);
     if (!res.ok) {
       stream.getTracks().forEach((t) => t.stop());
       useCallStore.getState().hang();

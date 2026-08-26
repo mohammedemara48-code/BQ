@@ -18,7 +18,16 @@ export class MediaCall {
   }
 
   async open(video: boolean, existing?: MediaStream | null) {
-    this.close();
+    // Tear down the old PC without stopping tracks we may reuse.
+    try {
+      this.pc?.close();
+    } catch {
+      /* ignore */
+    }
+    this.pc = null;
+    this.pendingIce = [];
+    this.remoteSet = false;
+    this.remote = new MediaStream();
     this.pc = new RTCPeerConnection({ iceServers: defaultIceServers() });
     this.remote = new MediaStream();
     this.pc.onicecandidate = (ev) => {
@@ -64,7 +73,10 @@ export class MediaCall {
 
   async offer() {
     if (!this.pc) return;
-    const offer = await this.pc.createOffer();
+    const offer = await this.pc.createOffer({
+      offerToReceiveAudio: true,
+      offerToReceiveVideo: true,
+    });
     await this.pc.setLocalDescription(offer);
     this.onSignal?.("offer", this.pc.localDescription);
   }
@@ -136,9 +148,16 @@ export class MediaCall {
     }
   }
 
-  close() {
-    this.local?.getTracks().forEach((t) => t.stop());
-    this.pc?.close();
+  close(opts?: { stopLocal?: boolean }) {
+    const stopLocal = opts?.stopLocal !== false;
+    if (stopLocal) {
+      this.local?.getTracks().forEach((t) => t.stop());
+    }
+    try {
+      this.pc?.close();
+    } catch {
+      /* ignore */
+    }
     this.pc = null;
     this.local = null;
     this.pendingIce = [];

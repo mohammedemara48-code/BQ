@@ -28,7 +28,7 @@ export function CallLayer() {
   const { user } = useCurrentUserState();
   const qc = useQueryClient();
   const call = useCallStore();
-  const incoming = useIncomingCall(Boolean(user) && !call.active && !call.ignoreIncoming);
+  const incoming = useIncomingCall(Boolean(user) && !call.active);
   const session = useCallSession(call.callId);
   const people = usePeople(call.active);
   const me = useMe(call.active);
@@ -101,7 +101,7 @@ export function CallLayer() {
 
   useEffect(() => {
     const row = incoming.data;
-    if (!row || call.active || call.ignoreIncoming) return;
+    if (!row || call.active) return;
     if (wasCallEnded(row.id)) {
       void qc.setQueryData(["incoming-call"], null);
       return;
@@ -189,7 +189,7 @@ export function CallLayer() {
       })
       .catch(() => setCamError("اسمح للميكروفون والكاميرا من الإعدادات"));
     return () => {
-      media.close();
+      media.close({ stopLocal: false });
       if (rtcRef.current === media) rtcRef.current = null;
     };
   }, [mediaOn, call.kind]);
