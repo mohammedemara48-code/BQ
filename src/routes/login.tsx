@@ -9,11 +9,13 @@ export const Route = createFileRoute("/login")({ component: Login });
 function Login() {
   const { user, isPending } = useCurrentUserState();
   const [waited, setWaited] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
   useEffect(() => {
+    setHydrated(true);
     const t = window.setTimeout(() => setWaited(true), 2800);
     return () => window.clearTimeout(t);
   }, []);
   if (!isPending && user) return <Navigate to="/" search={{ tab: "me" }} />;
-  if (isPending && hasBearerToken() && !waited) return <BqSplash />;
+  if (hydrated && isPending && hasBearerToken() && !waited) return <BqSplash />;
   return <LoginForm />;
 }

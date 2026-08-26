@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AdminPanel } from "@/components/admin-panel";
 import { Avatar } from "@/components/avatar";
+import { InstallBanner } from "@/components/pwa-register";
 import { Button } from "@/components/ui/button";
 import { Input, Label, Textarea } from "@/components/ui/input";
 import { forgetAccount, listAccounts, switchAccount } from "@/lib/bq/accounts";
@@ -29,7 +30,11 @@ export function ProfileTab() {
   const [intent, setIntent] = useState<Intent>("");
   const [showOnMap, setShowOnMap] = useState(true);
   const [busy, setBusy] = useState(false);
-  const accounts = typeof window === "undefined" ? [] : listAccounts();
+  const [accounts, setAccounts] = useState<ReturnType<typeof listAccounts>>([]);
+
+  useEffect(() => {
+    setAccounts(listAccounts());
+  }, [me.data?.userId]);
 
   useEffect(() => {
     if (!me.data) return;
@@ -316,6 +321,10 @@ export function ProfileTab() {
             </ul>
           </section>
         ) : null}
+
+        <div className="mt-2">
+          <InstallBanner />
+        </div>
 
         <Button variant="outline" className="w-full" onClick={() => void out()}>
           <LogOut className="size-4" />

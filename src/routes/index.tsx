@@ -9,34 +9,59 @@ import { BqSplash, LoginForm } from "@/components/login-form";
 import { NoticeBell } from "@/components/notice-bell";
 import { PeopleTab } from "@/components/people-tab";
 import { ProfileTab } from "@/components/profile-tab";
+import { AndroidInstallPage } from "@/components/pwa-register";
 import { Button } from "@/components/ui/button";
 import { rememberAccount, hasBearerToken } from "@/lib/bq/accounts";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { useBqMutations, useChats, useMe, usePeople, useRequests } from "@/lib/bq/hooks";
+import { wantsAndroidInstall } from "@/lib/bq/pwa";
 import { isProfileComplete } from "@/lib/bq/types";
 import { cn } from "@/lib/utils";
 
 export type Tab = "chats" | "people" | "calls" | "me";
 
+type HomeSearch = {
+  tab: Tab;
+  install?: boolean;
+  platform?: string;
+};
+
+function isInstallFlag(value: unknown): boolean {
+  if (value === true || value === 1 || value === "1" || value === "true") return true;
+  if (typeof value === "string" && value.replaceAll('"', "") === "1") return true;
+  return false;
+}
+
 export const Route = createFileRoute("/")({
-  validateSearch: (search: Record<string, unknown>): { tab: Tab } => ({
-    tab:
-      search.tab === "people" || search.tab === "calls" || search.tab === "me"
-        ? search.tab
-        : "chats",
-  }),
+  validateSearch: (search: Record<string, unknown>): HomeSearch => {
+    const next: HomeSearch = {
+      tab:
+        search.tab === "people" || search.tab === "calls" || search.tab === "me"
+          ? search.tab
+          : "chats",
+    };
+    if (isInstallFlag(search.install)) next.install = true;
+    if (typeof search.platform === "string" && search.platform.replaceAll('"', "").length > 0) {
+      next.platform = search.platform.replaceAll('"', "");
+    }
+    return next;
+  },
   component: Home,
 });
 
 function Home() {
   const { user, isPending } = useCurrentUserState();
-  const { tab } = Route.useSearch();
+  const search = Route.useSearch();
+  const { tab } = search;
+  const installMode = wantsAndroidInstall(search);
   const [waited, setWaited] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
   useEffect(() => {
+    setHydrated(true);
     const t = window.setTimeout(() => setWaited(true), 2800);
     return () => window.clearTimeout(t);
   }, []);
-  const signedIn = Boolean(user) && !isPending;
+  const signedIn = Boolean(user) && !isPending && !installMode;
   usePeople(signedIn);
   useChats(signedIn);
   const me = useMe(signedIn);
@@ -51,11 +76,15 @@ function Home() {
     });
   }, [user, me.data?.name, me.data?.photoUrl]);
 
+  if (installMode) {
+    return <AndroidInstallPage />;
+  }
+
   if (!user) {
-    if (isPending && hasBearerToken() && !waited) return <BqSplash />;
+    if (hydrated && isPending && hasBearerToken() && !waited) return <BqSplash />;
     return <LoginForm />;
   }
-  if (me.isPending && !waited) return <BqSplash />;
+  if (hydrated && me.isPending && !waited) return <BqSplash />;
   if (!me.data || !isProfileComplete(me.data)) return <CompleteProfile />;
 
   return (

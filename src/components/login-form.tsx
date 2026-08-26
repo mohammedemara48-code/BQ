@@ -1,5 +1,6 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { BqMark } from "@/components/bq-mark";
+import { InstallBanner } from "@/components/pwa-register";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import {
@@ -14,8 +15,12 @@ const PREVIEW_BEARER_KEY = "grok-auth.bearer-token";
 
 function persistAuthToken(payload: unknown): boolean {
   if (!payload || typeof payload !== "object") return false;
-  const token = (payload as { token?: unknown }).token;
-  if (typeof token !== "string" || token.length < 8) return false;
+  const data = payload as { token?: unknown; session?: { token?: unknown } };
+  const token =
+    (typeof data.token === "string" && data.token) ||
+    (typeof data.session?.token === "string" && data.session.token) ||
+    "";
+  if (token.length < 8) return false;
   try {
     window.sessionStorage.setItem(PREVIEW_BEARER_KEY, token);
     return true;
@@ -31,30 +36,38 @@ export function LoginForm() {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const saved = typeof window === "undefined" ? [] : listAccounts();
+  const [saved, setSaved] = useState<ReturnType<typeof listAccounts>>([]);
+  useEffect(() => {
+    setSaved(listAccounts());
+  }, []);
 
   async function onEmail(e: FormEvent) {
     e.preventDefault();
     setError("");
     setBusy(true);
     try {
+      const mail = email.trim();
       if (mode === "up") {
         const res = await authClient.signUp.email({
-          email: email.trim(),
+          email: mail,
           password,
-          name: name.trim() || email.trim().split("@")[0] || "عضو",
+          name: name.trim() || mail.split("@")[0] || "عضو",
         });
         if (res.error) throw new Error(res.error.message || "تعذر إنشاء الحساب");
         persistAuthToken(res.data);
       } else {
         const res = await authClient.signIn.email({
-          email: email.trim(),
+          email: mail,
           password,
         });
         if (res.error) throw new Error(res.error.message || "بيانات غير صحيحة");
         persistAuthToken(res.data);
       }
-      await authClient.getSession();
+      try {
+        await authClient.getSession();
+      } catch {
+        /* cookie/bearer session may settle on the next load */
+      }
       window.location.assign("/?tab=me");
     } catch (err) {
       setError(err instanceof Error ? arabicAuthError(err.message) : "حدث خطأ");
@@ -194,6 +207,10 @@ export function LoginForm() {
             </>
           )}
         </div>
+
+        <div className="mt-4">
+          <InstallBanner />
+        </div>
       </div>
     </main>
   );
@@ -216,13 +233,13 @@ function arabicAuthError(msg: string): string {
     return "المتصفح منع النافذة. استخدم البريد.";
   }
   if (m.includes("invalid origin") || m.includes("forbidden")) {
-    return "تعذر إكمال الدخول.";
+    return "تعذر إكمال الدخول من هذا الرابط. أعد المحاولة أو استخدم البريد.";
   }
-  if (m.includes("invalid") || m.includes("credential")) {
+  if (m.includes("invalid email or password") || m.includes("invalid") || m.includes("credential")) {
     return "البريد أو كلمة المرور غير صحيحة";
   }
-  if (m.includes("exist") || m.includes("already")) return "هذا البريد مسجّل";
-  if (m.includes("password")) return "كلمة المرور قصيرة";
+  if (m.includes("exist") || m.includes("already")) return "هذا البريد مسجّل. اضغط لدي حساب.";
+  if (m.includes("password")) return "كلمة المرور يجب ألا تقل عن 8 أحرف";
   if (m.includes("email")) return "تحقق من البريد";
   return msg;
 }
