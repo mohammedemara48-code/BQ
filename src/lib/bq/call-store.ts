@@ -148,8 +148,6 @@ export const useCallStore = create<CallState>((set, get) => ({
   hang: () => {
     ringOff();
     const prev = get().preStream;
-    // Don't stop preStream here if MediaCall still owns it — CallLayer closes RTC first.
-    // Only clear the reference; tracks are stopped by MediaCall.close or by setPreStream(null).
     set({
       active: false,
       callId: null,
@@ -159,21 +157,18 @@ export const useCallStore = create<CallState>((set, get) => ({
       peerId: "",
       preStream: null,
     });
-    // If hang is called without RTC ever taking the stream, stop it.
+    // Stop only if still live and not yet adopted by RTC (tracks stopped by MediaCall.close otherwise)
     if (prev) {
-      // Delay stop slightly so open() can adopt the stream first in race cases.
       window.setTimeout(() => {
-        const still = useCallStore.getState().preStream;
-        if (still === prev) return;
-        // tracks may already be stopped by MediaCall
         try {
+          // If MediaCall owns them they may already be stopped; stopping twice is safe.
           prev.getTracks().forEach((t) => {
             if (t.readyState === "live") t.stop();
           });
         } catch {
           /* ignore */
         }
-      }, 800);
+      }, 1500);
     }
   },
   setMuted: (v) => set({ muted: v }),

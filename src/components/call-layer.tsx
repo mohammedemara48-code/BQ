@@ -75,6 +75,8 @@ export function CallLayer() {
   const [seconds, setSeconds] = useState(0);
   const [camError, setCamError] = useState("");
   const [linked, setLinked] = useState(false);
+  const [hasLocalVideo, setHasLocalVideo] = useState(false);
+  const [hasRemoteVideo, setHasRemoteVideo] = useState(false);
   const [rtcReady, setRtcReady] = useState(false);
   const localRef = useRef<HTMLVideoElement>(null);
   const remoteRef = useRef<HTMLVideoElement>(null);
@@ -204,33 +206,50 @@ export function CallLayer() {
     offered.current = false;
     seenSignals.current = 0;
     setLinked(false);
+    setHasLocalVideo(false);
+    setHasRemoteVideo(false);
     setRtcReady(false);
     setCamError("");
 
     const attachLocal = (stream: MediaStream) => {
       localStreamRef.current = stream;
+      const vids = stream.getVideoTracks().filter((x) => x.readyState === "live");
+      setHasLocalVideo(vids.length > 0);
       for (const el of [localRef.current, pipLocalRef.current]) {
         if (!el) continue;
         el.srcObject = stream;
         el.muted = true;
+        el.playsInline = true;
         el.setAttribute("playsinline", "true");
-        void el.play().catch(() => undefined);
+        el.setAttribute("webkit-playsinline", "true");
+        const play = () => void el.play().catch(() => undefined);
+        play();
+        // Android sometimes needs a second play() after metadata
+        el.onloadedmetadata = play;
       }
     };
     const attachRemote = (stream: MediaStream) => {
+      const vids = stream.getVideoTracks().filter((x) => x.readyState === "live");
+      setHasRemoteVideo(vids.length > 0);
       setLinked(true);
       if (remoteRef.current) {
         remoteRef.current.srcObject = stream;
         remoteRef.current.muted = true;
+        remoteRef.current.playsInline = true;
         remoteRef.current.setAttribute("playsinline", "true");
-        void remoteRef.current
-          .play()
-          .then(() => {
-            if (remoteRef.current) {
-              remoteRef.current.muted = !useCallStore.getState().speaker;
-            }
-          })
-          .catch(() => undefined);
+        remoteRef.current.setAttribute("webkit-playsinline", "true");
+        const play = () => {
+          void remoteRef.current
+            ?.play()
+            .then(() => {
+              if (remoteRef.current) {
+                remoteRef.current.muted = !useCallStore.getState().speaker;
+              }
+            })
+            .catch(() => undefined);
+        };
+        play();
+        remoteRef.current.onloadedmetadata = play;
       }
       if (remoteAudioRef.current) {
         remoteAudioRef.current.srcObject = stream;
@@ -255,8 +274,13 @@ export function CallLayer() {
       .then(() => {
         if (rtcRef.current !== media) return;
         media.setMuted(useCallStore.getState().muted);
-        media.setCamOff(useCallStore.getState().camOff);
+        media.setCamOff(false); // always start with camera on for video calls
+        if (call.kind === "video") useCallStore.getState().setCamOff(false);
+        setHasLocalVideo(media.hasLocalVideo);
         setRtcReady(true);
+        if (call.kind === "video" && !media.hasLocalVideo) {
+          setCamError("الاتصال شغال صوت — الكاميرا لم تُفتح. اضغط تفعيل الكاميرا");
+        }
       })
       .catch(async () => {
         // Last-chance: try acquiring again inside the effect (may fail without gesture)
@@ -539,9 +563,10 @@ export function CallLayer() {
             ref={remoteRef}
             playsInline
             autoPlay
+            muted={false}
             className={cn(
-              "absolute inset-0 size-full object-cover",
-              linked ? "opacity-100" : "opacity-0",
+              "absolute inset-0 size-full object-cover bg-black",
+              linked && hasRemoteVideo ? "opacity-100" : "opacity-0",
             )}
           />
           {photo && !linked ? (
@@ -556,7 +581,11 @@ export function CallLayer() {
             muted
             playsInline
             autoPlay
-            className="absolute bottom-36 end-4 z-10 h-36 w-24 rounded-xl border border-border object-cover shadow-[var(--shadow-glow)]"
+            className={cn(
+              "absolute bottom-36 end-4 z-20 h-36 w-24 rounded-xl border border-border object-cover shadow-[var(--shadow-glow)] bg-elevated",
+              // Mirror selfie preview like WhatsApp
+              hasLocalVideo ? "scale-x-[-1]" : "opacity-60",
+            )}
           />
         </>
       ) : photo ? (
@@ -578,12 +607,18 @@ export function CallLayer() {
         </button>
         <p className="text-xs text-muted">
           {call.kind === "video" ? "مكالمة فيديو" : "مكالمة صوت"}
-          {call.phase === "live" ? (linked ? " · متصل" : " · جاري الربط…") : ""}
+          {call.phase === "live"
+            ? linked
+              ? hasRemoteVideo
+                ? " · متصل"
+                : " · متصل (صوت)"
+              : " · جاري الربط…"
+            : ""}
         </p>
         <span className="size-11" />
       </div>
       <div className="relative z-10 flex flex-col items-center">
-        {!linked || call.kind !== "video" || call.phase === "ring" ? (
+        {!(linked && hasRemoteVideo) || call.kind !== "video" || call.phase === "ring" ? (
           <>
             <div className="relative">
               {call.phase === "ring" ? (

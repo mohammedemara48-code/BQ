@@ -11,6 +11,8 @@ export class MediaCall {
   private offering = false;
   private closed = false;
   private queue: Promise<void> = Promise.resolve();
+  /** When true, close() must not stop local tracks (ownership transferred elsewhere). */
+  private keepLocalTracks = false;
   onLocalStream: ((s: MediaStream) => void) | null = null;
   onRemoteStream: ((s: MediaStream) => void) | null = null;
   onSignal: ((kind: SignalKind, payload: unknown) => void) | null = null;
@@ -27,7 +29,14 @@ export class MediaCall {
     return this.local;
   }
 
-  /** Acquire camera/mic. Prefer simple constraints (Android-friendly). */
+  get hasLocalVideo() {
+    return (this.local?.getVideoTracks().filter((t) => t.readyState === "live").length ?? 0) > 0;
+  }
+
+  get hasRemoteVideo() {
+    return (this.remote?.getVideoTracks().filter((t) => t.readyState === "live").length ?? 0) > 0;
+  }
+
   static async acquire(video: boolean): Promise<MediaStream> {
     const attempts: MediaStreamConstraints[] = video
       ? [
@@ -52,7 +61,10 @@ export class MediaCall {
   }
 
   async open(video: boolean, existing?: MediaStream | null) {
+    // Close previous PC but keep tracks if we are about to reuse `existing`
+    this.keepLocalTracks = Boolean(existing);
     this.close();
+    this.keepLocalTracks = false;
     this.closed = false;
     this.pc = new RTCPeerConnection({ iceServers: defaultIceServers() });
     this.pc.onicecandidate = (ev) => {
@@ -63,10 +75,15 @@ export class MediaCall {
     this.pc.ontrack = (ev) => {
       if (this.closed) return;
       if (!this.remote) this.remote = new MediaStream();
-      const tracks = ev.streams[0]?.getTracks() ?? [ev.track];
-      for (const track of tracks) {
-        if (!this.remote.getTracks().some((t) => t.id === track.id)) {
-          this.remote.addTrack(track);
+      // Always add the fired track; also merge any stream tracks
+      if (!this.remote.getTracks().some((t) => t.id === ev.track.id)) {
+        this.remote.addTrack(ev.track);
+      }
+      if (ev.streams[0]) {
+        for (const track of ev.streams[0].getTracks()) {
+          if (!this.remote.getTracks().some((t) => t.id === track.id)) {
+            this.remote.addTrack(track);
+          }
         }
       }
       this.onRemoteStream?.(this.remote);
@@ -92,13 +109,10 @@ export class MediaCall {
       this.local = null;
       return;
     }
-    // Ensure video tracks stay enabled when we want video
-    if (video) {
-      this.local.getVideoTracks().forEach((t) => {
-        t.enabled = true;
-      });
-    }
-    this.local.getTracks().forEach((t) => this.pc!.addTrack(t, this.local!));
+    this.local.getTracks().forEach((t) => {
+      t.enabled = true;
+      this.pc!.addTrack(t, this.local!);
+    });
     this.onLocalStream?.(this.local);
   }
 
@@ -120,7 +134,6 @@ export class MediaCall {
   }
 
   async handle(kind: string, payload: unknown) {
-    // Serialize SDP/ICE so glare and order stay correct
     this.queue = this.queue.then(() => this.handleOne(kind, payload)).catch(() => undefined);
     await this.queue;
   }
@@ -191,8 +204,17 @@ export class MediaCall {
 
   close() {
     this.closed = true;
-    this.local?.getTracks().forEach((t) => t.stop());
-    this.remote?.getTracks().forEach((t) => t.stop());
+    if (!this.keepLocalTracks) {
+      this.local?.getTracks().forEach((t) => t.stop());
+    }
+    // Never stop remote tracks we don't own exclusively — just detach
+    this.remote?.getTracks().forEach((t) => {
+      try {
+        t.stop();
+      } catch {
+        /* ignore */
+      }
+    });
     try {
       this.pc?.close();
     } catch {
