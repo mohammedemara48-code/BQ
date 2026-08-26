@@ -35,23 +35,28 @@ import { cn, formatDuration } from "@/lib/utils";
 const ENDED_KEY = "bq-ended-calls";
 const CALL_HISTORY_KEY = "bq-call";
 
+/** In-memory + sessionStorage so a hung call never rings again this tab. */
+const endedCallIds = new Set<number>();
+/** Ignore ALL incoming UI for a short window after hang (server race). */
+let suppressIncomingUntil = 0;
+
 function loadEnded(): Set<number> {
   try {
     const raw = sessionStorage.getItem(ENDED_KEY);
-    if (!raw) return new Set();
+    if (!raw) return endedCallIds;
     const arr = JSON.parse(raw) as number[];
-    return new Set(Array.isArray(arr) ? arr : []);
+    if (Array.isArray(arr)) for (const id of arr) endedCallIds.add(id);
   } catch {
-    return new Set();
+    /* ignore */
   }
+  return endedCallIds;
 }
 
 function markEnded(id: number) {
-  const s = loadEnded();
-  s.add(id);
-  // keep last 40 ids
-  const arr = [...s].slice(-40);
+  endedCallIds.add(id);
+  suppressIncomingUntil = Date.now() + 4000;
   try {
+    const arr = [...endedCallIds].slice(-40);
     sessionStorage.setItem(ENDED_KEY, JSON.stringify(arr));
   } catch {
     /* ignore */
@@ -59,7 +64,12 @@ function markEnded(id: number) {
 }
 
 function wasEnded(id: number) {
-  return loadEnded().has(id);
+  loadEnded();
+  return endedCallIds.has(id);
+}
+
+function isIncomingSuppressed() {
+  return Date.now() < suppressIncomingUntil;
 }
 
 export function CallLayer() {
@@ -119,27 +129,23 @@ export function CallLayer() {
         historyPushed.current = false;
         return;
       }
-      // Back during call → end call completely, stay on page.
+      // Back during call → end call completely. Do NOT push another history
+      // entry (that made the next back reopen a "ghost" call UI).
       historyPushed.current = false;
       void finishAsync(
         st.callId,
         st.role === "in" && st.phase === "ring" ? "decline" : "hang",
       );
-      try {
-        window.history.pushState({ [CALL_HISTORY_KEY]: "closed" }, "");
-      } catch {
-        /* ignore */
-      }
     }
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
-  // ── Incoming: never re-open a call we already ended this session ──
+  // ── Incoming: never re-open a call we already ended / just hung up ──
   useEffect(() => {
     const row = incoming.data;
     if (!row || call.active) return;
-    if (wasEnded(row.id)) {
+    if (isIncomingSuppressed() || wasEnded(row.id)) {
       void qc.setQueryData(["incoming-call"], null);
       return;
     }
@@ -401,10 +407,12 @@ export function CallLayer() {
     if (closing.current) return;
     closing.current = true;
     if (id) markEnded(id);
+    else suppressIncomingUntil = Date.now() + 4000;
     teardownMedia();
-    // Clear local UI immediately so back / re-render cannot show the call again
+    // Clear local UI immediately — bubble + full screen must vanish now
     useCallStore.getState().hang();
     void qc.setQueryData(["incoming-call"], null);
+    void qc.cancelQueries({ queryKey: ["incoming-call"] });
     if (id) void qc.removeQueries({ queryKey: ["call-session", id] });
     historyPushed.current = false;
 
@@ -418,7 +426,11 @@ export function CallLayer() {
     void qc.invalidateQueries({ queryKey: ["messages"] });
     void qc.invalidateQueries({ queryKey: ["chats"] });
     void qc.invalidateQueries({ queryKey: ["calls"] });
-    void qc.invalidateQueries({ queryKey: ["incoming-call"] });
+    // Delay incoming refetch so server status is committed and suppress window holds
+    window.setTimeout(() => {
+      void qc.setQueryData(["incoming-call"], null);
+      void qc.invalidateQueries({ queryKey: ["incoming-call"] });
+    }, 1500);
     if (timedOut) toast.error("لا رد");
     closing.current = false;
   }

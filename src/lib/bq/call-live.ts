@@ -240,6 +240,14 @@ export const endCall = createServerFn({ method: "POST" })
       set status = ${reason}, ended_at = now(), ended_by = ${context.userId}
       where id = ${data.callId}
     `;
+    // Kill any other ringing/live rows for this user so UI cannot reopen another call
+    await sql`
+      update live_calls
+      set status = 'ended', ended_at = now(), ended_by = ${context.userId}
+      where status in ('ringing', 'live')
+        and id <> ${data.callId}
+        and (caller_id = ${context.userId} or callee_id = ${context.userId})
+    `;
     let duration = 0;
     if (row.answered_at && reason === "ended") {
       duration = Math.max(1, Math.round((Date.now() - new Date(row.answered_at).getTime()) / 1000));
