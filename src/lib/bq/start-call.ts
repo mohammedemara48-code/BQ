@@ -1,29 +1,7 @@
 import { toast } from "sonner";
 import { placeCall } from "./call-live";
 import { startCall, useCallStore, type CallKind } from "./call-store";
-
-async function acquireMedia(video: boolean): Promise<MediaStream> {
-  const attempts: MediaStreamConstraints[] = video
-    ? [
-        { audio: true, video: true },
-        { audio: true, video: { facingMode: "user" } },
-        { audio: true, video: false },
-      ]
-    : [{ audio: true, video: false }];
-  let last: unknown;
-  for (const c of attempts) {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia(c);
-      stream.getTracks().forEach((t) => {
-        t.enabled = true;
-      });
-      return stream;
-    } catch (e) {
-      last = e;
-    }
-  }
-  throw last instanceof Error ? last : new Error("getUserMedia failed");
-}
+import { mediaErrorMessage, requestCallMedia } from "./media-permission";
 
 export async function beginOutgoingCall(input: {
   peerId: string;
@@ -33,16 +11,15 @@ export async function beginOutgoingCall(input: {
 }): Promise<boolean> {
   const cur = useCallStore.getState();
   if (cur.active) {
-    // A leftover UI session must not silently swallow the tap.
     useCallStore.getState().hang();
   }
-  let stream: MediaStream | null = null;
-  try {
-    stream = await acquireMedia(input.kind === "video");
-  } catch {
-    toast.error("اسمح للميكروفون والكاميرا من الإعدادات");
+
+  const media = await requestCallMedia(input.kind === "video");
+  if (!media.ok) {
+    toast.error(mediaErrorMessage(media.reason));
     return false;
   }
+
   startCall({
     peerId: input.peerId,
     peerName: input.peerName,
@@ -50,7 +27,12 @@ export async function beginOutgoingCall(input: {
     kind: input.kind,
     role: "out",
   });
-  useCallStore.getState().setPreStream(stream);
+  // If video requested but only audio granted, keep kind as video UI but cam may be off
+  if (input.kind === "video" && !media.hasVideo) {
+    useCallStore.getState().setCamOff(true);
+  }
+  useCallStore.getState().setPreStream(media.stream);
+
   try {
     const res = await Promise.race([
       placeCall({ data: { peerId: input.peerId, kind: input.kind } }),
@@ -59,7 +41,7 @@ export async function beginOutgoingCall(input: {
       }),
     ]);
     if (!res.ok) {
-      stream.getTracks().forEach((t) => t.stop());
+      media.stream.getTracks().forEach((t) => t.stop());
       useCallStore.getState().hang();
       toast.error(
         res.reason === "busy"
@@ -73,9 +55,9 @@ export async function beginOutgoingCall(input: {
     useCallStore.getState().setCallId(res.id);
     return true;
   } catch {
-    stream.getTracks().forEach((t) => t.stop());
+    media.stream.getTracks().forEach((t) => t.stop());
     useCallStore.getState().hang();
-    toast.error("تعذر بدء المكالمة");
+    toast.error("تعذر بدء المكالمة — حاول تاني");
     return false;
   }
 }

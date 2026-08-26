@@ -14,6 +14,7 @@ import {
 import { useState } from "react";
 import { toast } from "sonner";
 import { Avatar } from "@/components/avatar";
+import { DialButton } from "@/components/dial-button";
 import { Button } from "@/components/ui/button";
 import { RedirectToSignIn } from "@/lib/auth/gates";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
@@ -171,18 +172,28 @@ function PersonPage() {
               محادثة
             </Button>
           </Link>
-          <Link to="/call/$peerId" params={{ peerId: id }} search={{ kind: "audio" }}>
-            <Button variant="outline" className="w-full">
-              <Phone className="size-4" />
-              صوت
-            </Button>
-          </Link>
-          <Link to="/call/$peerId" params={{ peerId: id }} search={{ kind: "video" }}>
-            <Button variant="outline" className="w-full">
-              <Video className="size-4" />
-              فيديو
-            </Button>
-          </Link>
+          <DialButton
+            peerId={id}
+            peerName={person?.name}
+            peerPhoto={person?.photoUrl}
+            kind="audio"
+            className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-border bg-transparent px-4 text-sm font-medium hover:bg-elevated"
+            aria-label="صوت"
+          >
+            <Phone className="size-4" />
+            صوت
+          </DialButton>
+          <DialButton
+            peerId={id}
+            peerName={person?.name}
+            peerPhoto={person?.photoUrl}
+            kind="video"
+            className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-border bg-transparent px-4 text-sm font-medium hover:bg-elevated"
+            aria-label="فيديو"
+          >
+            <Video className="size-4" />
+            فيديو
+          </DialButton>
         </div>
 
         <button

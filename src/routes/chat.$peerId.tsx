@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { toast } from "sonner";
 import { Avatar } from "@/components/avatar";
 import { ChatComposer } from "@/components/chat-composer";
+import { DialButton } from "@/components/dial-button";
 import { DmBubble } from "@/components/message-bubble";
 import { Button } from "@/components/ui/button";
 import { RedirectToSignIn } from "@/lib/auth/gates";
@@ -96,24 +97,26 @@ function ChatPage() {
             <Lock className="size-5" />
           </button>
         ) : null}
-        <Link
-          to="/call/$peerId"
-          params={{ peerId }}
-          search={{ kind: "audio" }}
+        <DialButton
+          peerId={peerId}
+          peerName={name}
+          peerPhoto={person?.photoUrl}
+          kind="audio"
           className="grid size-11 place-items-center rounded-lg hover:bg-elevated"
           aria-label="صوت"
         >
           <Phone className="size-5" />
-        </Link>
-        <Link
-          to="/call/$peerId"
-          params={{ peerId }}
-          search={{ kind: "video" }}
+        </DialButton>
+        <DialButton
+          peerId={peerId}
+          peerName={name}
+          peerPhoto={person?.photoUrl}
+          kind="video"
           className="grid size-11 place-items-center rounded-lg hover:bg-elevated"
           aria-label="فيديو"
         >
           <Video className="size-5" />
-        </Link>
+        </DialButton>
       </header>
 
       <div ref={scroller} className="flex-1 space-y-2 overflow-y-auto px-3 py-4">

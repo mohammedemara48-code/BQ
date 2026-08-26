@@ -1,6 +1,6 @@
-import { Link } from "@tanstack/react-router";
 import { Phone, PhoneIncoming, PhoneOutgoing, Video } from "lucide-react";
 import { Avatar } from "@/components/avatar";
+import { DialButton } from "@/components/dial-button";
 import { useCalls, usePeople } from "@/lib/bq/hooks";
 import { formatDuration, formatTime } from "@/lib/utils";
 
@@ -17,19 +17,21 @@ export function CallsTab() {
           <h2 className="mb-3 text-sm font-medium text-muted">اتصال سريع</h2>
           <div className="grid grid-cols-2 gap-2">
             {recent.map((p) => (
-              <Link
+              <DialButton
                 key={p.userId}
-                to="/call/$peerId"
-                params={{ peerId: p.userId }}
-                search={{ kind: "audio" }}
-                className="flex items-center gap-3 rounded-lg border border-border bg-surface px-3 py-3 hover:bg-elevated"
+                peerId={p.userId}
+                peerName={p.name}
+                peerPhoto={p.photoUrl}
+                kind="audio"
+                className="flex items-center gap-3 rounded-lg border border-border bg-surface px-3 py-3 text-start hover:bg-elevated"
+                aria-label={`اتصال ${p.name}`}
               >
                 <Avatar name={p.name} src={p.photoUrl} online size="sm" />
                 <span className="min-w-0">
                   <span className="block truncate text-sm font-medium">{p.name}</span>
                   <span className="text-xs text-muted">صوت</span>
                 </span>
-              </Link>
+              </DialButton>
             ))}
           </div>
         </section>
@@ -56,11 +58,13 @@ export function CallsTab() {
               const DirIcon = c.direction === "in" ? PhoneIncoming : PhoneOutgoing;
               return (
                 <li key={c.id}>
-                  <Link
-                    to="/call/$peerId"
-                    params={{ peerId: c.peerId }}
-                    search={{ kind: c.kind }}
-                    className="flex items-center gap-3 px-3 py-3 hover:bg-elevated"
+                  <DialButton
+                    peerId={c.peerId}
+                    peerName={name}
+                    peerPhoto={p?.photoUrl}
+                    kind={c.kind}
+                    className="flex w-full items-center gap-3 px-3 py-3 text-start hover:bg-elevated"
+                    aria-label={`اتصال ${name}`}
                   >
                     <Avatar name={name} src={p?.photoUrl} size="sm" />
                     <span className="min-w-0 flex-1">
@@ -78,7 +82,7 @@ export function CallsTab() {
                         {c.durationSec > 0 ? ` · ${formatDuration(c.durationSec)}` : ""}
                       </span>
                     </span>
-                  </Link>
+                  </DialButton>
                 </li>
               );
             })}
