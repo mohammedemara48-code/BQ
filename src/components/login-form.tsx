@@ -3,13 +3,9 @@ import { BqMark } from "@/components/bq-mark";
 import { InstallBanner } from "@/components/pwa-register";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
-import {
-  GROK_PROVIDERS,
-  authClient,
-  authEnabled,
-  signIn,
-} from "@/lib/auth/client";
-import { listAccounts, switchAccount } from "@/lib/bq/accounts";
+import { GROK_PROVIDERS, authClient, authEnabled, signIn } from "@/lib/auth/client";
+import { toast } from "sonner";
+import { listAccounts, rememberAccount, switchAccount } from "@/lib/bq/accounts";
 
 const PREVIEW_BEARER_KEY = "grok-auth.bearer-token";
 
@@ -26,6 +22,24 @@ function persistAuthToken(payload: unknown): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+async function stashSession() {
+  try {
+    const sess = await authClient.getSession();
+    persistAuthToken(sess.data);
+    const user = sess.data?.user;
+    if (user?.id) {
+      await rememberAccount({
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        photo: user.image,
+      });
+    }
+  } catch {
+    /* next page load will retry */
   }
 }
 
@@ -55,6 +69,7 @@ export function LoginForm() {
         });
         if (res.error) throw new Error(res.error.message || "تعذر إنشاء الحساب");
         persistAuthToken(res.data);
+        await stashSession();
       } else {
         const res = await authClient.signIn.email({
           email: mail,
@@ -62,6 +77,7 @@ export function LoginForm() {
         });
         if (res.error) throw new Error(res.error.message || "بيانات غير صحيحة");
         persistAuthToken(res.data);
+        await stashSession();
       }
       try {
         await authClient.getSession();
@@ -105,7 +121,11 @@ export function LoginForm() {
                 <button
                   type="button"
                   className="flex w-full items-center gap-3 rounded-xl border border-border bg-surface px-3 py-3 text-start"
-                  onClick={() => switchAccount(a.id)}
+                  onClick={() => {
+                    void switchAccount(a.id).then((ok) => {
+                      if (!ok) toast.error("أعد دخول هذا الحساب");
+                    });
+                  }}
                 >
                   {a.photo ? (
                     <img src={a.photo} alt="" className="size-10 rounded-full object-cover" />

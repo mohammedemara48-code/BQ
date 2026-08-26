@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { BadgeCheck, Heart, MapPin, MessageCircle, Search, UserPlus } from "lucide-react";
+import { BadgeCheck, Heart, MapPin, MessageCircle, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Avatar } from "@/components/avatar";
@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useBqMutations, useMe, usePeople, useRequests } from "@/lib/bq/hooks";
 import type { Profile } from "@/lib/bq/types";
-import { cn, formatKm } from "@/lib/utils";
+import { cn, formatKm, normalizeSerial } from "@/lib/utils";
 
 type Filter = "all" | "online" | "near";
 
@@ -35,6 +35,7 @@ export function PeopleTab() {
 
   const list = useMemo(() => {
     const needle = q.trim();
+    const serial = normalizeSerial(needle);
     let rows = people.data ?? [];
     if (filter === "online") rows = rows.filter((p) => p.online);
     if (filter === "near") {
@@ -50,13 +51,16 @@ export function PeopleTab() {
           p.city.includes(needle) ||
           p.bio.includes(needle) ||
           p.role.includes(needle) ||
-          p.intent.includes(needle),
+          p.intent.includes(needle) ||
+          (p.serial && p.serial.toUpperCase().includes(needle.toUpperCase())) ||
+          (serial && p.serial === serial),
       );
     }
     return rows;
   }, [people.data, q, filter]);
 
-  const featured = filter === "near" ? list[0] : (list.find((p) => p.online) ?? list[0]);
+  const featured = filter === "near" ? list[0] : undefined;
+  const onlineCount = (people.data ?? []).filter((p) => p.online).length;
 
   function shareLocation() {
     if (!navigator.geolocation) {
@@ -84,15 +88,15 @@ export function PeopleTab() {
           <Input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="الاسم أو المدينة"
+            placeholder="الاسم أو الرقم التسلسلي"
             className="pe-10"
           />
         </div>
         <div className="flex gap-2 overflow-x-auto">
           {(
             [
-              ["all", "الكل"],
-              ["online", "متصل"],
+              ["all", `الكل (${people.data?.length ?? 0})`],
+              ["online", `متصل (${onlineCount})`],
               ["near", "قريبون"],
             ] as const
           ).map(([id, label]) => (
@@ -135,18 +139,41 @@ export function PeopleTab() {
               onRequest={() => request.mutate(featured.userId)}
             />
           ) : null}
-          <div className="grid grid-cols-2 gap-3">
+          <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-surface">
             {list
               .filter((p) => p.userId !== featured?.userId)
               .map((p) => (
-                <PersonCard
-                  key={p.userId}
-                  person={p}
-                  requested={requested.has(p.userId)}
-                  onRequest={() => request.mutate(p.userId)}
-                />
+                <li key={p.userId} className="flex items-center gap-2 px-3 py-2.5">
+                  <Link to="/person/$id" params={{ id: p.userId }} className="flex min-w-0 flex-1 items-center gap-3">
+                    <Avatar name={p.name} src={p.photoUrl} online={p.online} verified={p.verified} />
+                    <span className="min-w-0">
+                      <span className="flex items-center gap-1 truncate font-medium">
+                        {p.name}
+                        {p.verified || p.isAdmin ? <BadgeCheck className="size-3.5 shrink-0 text-primary" /> : null}
+                      </span>
+                      <span className="block truncate text-xs text-muted" dir="ltr">
+                        {p.serial || p.city || p.role}
+                        {p.distanceKm != null ? ` · ${formatKm(p.distanceKm)}` : ""}
+                      </span>
+                    </span>
+                  </Link>
+                  <Button
+                    size="sm"
+                    variant={requested.has(p.userId) ? "secondary" : "primary"}
+                    disabled={requested.has(p.userId)}
+                    onClick={() => request.mutate(p.userId)}
+                  >
+                    <Heart className="size-3.5" />
+                    {requested.has(p.userId) ? "تم" : "متابعة"}
+                  </Button>
+                  <Link to="/chat/$peerId" params={{ peerId: p.userId }}>
+                    <Button size="icon" variant="ghost" className="size-10" aria-label="محادثة">
+                      <MessageCircle className="size-4" />
+                    </Button>
+                  </Link>
+                </li>
               ))}
-          </div>
+          </ul>
         </>
       )}
     </div>
@@ -170,11 +197,7 @@ function FeaturedCard({
     <article className="relative overflow-hidden rounded-xl border border-border bg-surface">
       <Link to="/person/$id" params={{ id: person.userId }} className="block">
         <div className="relative h-72">
-          <img
-            src={person.photoUrl || undefined}
-            alt=""
-            className="size-full object-cover object-top"
-          />
+          <img src={person.photoUrl || undefined} alt="" className="size-full object-cover object-top" />
           <div className="absolute inset-0 bg-gradient-to-t from-bg via-bg/20 to-transparent" />
           <div className="absolute inset-x-0 bottom-0 p-4">
             <div className="flex items-end justify-between gap-3">
@@ -184,14 +207,17 @@ function FeaturedCard({
                   {person.verified || person.isAdmin ? <BadgeCheck className="size-5 text-primary" /> : null}
                 </h3>
                 <p className="text-sm text-muted">{meta(person)}</p>
+                {person.serial ? (
+                  <p className="mt-1 text-xs text-subtle" dir="ltr">
+                    {person.serial}
+                  </p>
+                ) : null}
                 {person.distanceKm != null ? (
                   <p className="mt-1 text-xs text-accent">{formatKm(person.distanceKm)}</p>
                 ) : null}
               </div>
               {person.online ? (
-                <span className="rounded-full bg-online/20 px-2.5 py-1 text-xs font-medium text-online">
-                  متصل
-                </span>
+                <span className="rounded-full bg-online/20 px-2.5 py-1 text-xs font-medium text-online">متصل</span>
               ) : null}
             </div>
             <p className="mt-2 line-clamp-2 text-sm text-fg/85">{person.bio}</p>
@@ -206,68 +232,12 @@ function FeaturedCard({
           onClick={onRequest}
         >
           <Heart className="size-4" />
-          {requested ? "تم" : "اهتمام"}
+          {requested ? "تم" : "متابعة"}
         </Button>
         <Link to="/chat/$peerId" params={{ peerId: person.userId }} className="flex-1">
           <Button variant="secondary" className="w-full">
             <MessageCircle className="size-4" />
             محادثة
-          </Button>
-        </Link>
-      </div>
-    </article>
-  );
-}
-
-function PersonCard({
-  person,
-  requested,
-  onRequest,
-}: {
-  person: Profile;
-  requested: boolean;
-  onRequest: () => void;
-}) {
-  return (
-    <article className="overflow-hidden rounded-xl border border-border bg-surface">
-      <Link to="/person/$id" params={{ id: person.userId }} className="block">
-        <div className="relative h-40">
-          {person.photoUrl ? (
-            <img src={person.photoUrl} alt="" className="size-full object-cover object-top" />
-          ) : (
-            <div className="grid size-full place-items-center bg-elevated">
-              <Avatar name={person.name} size="lg" verified={person.verified || person.isAdmin} />
-            </div>
-          )}
-          {person.online ? (
-            <span className="absolute top-2 start-2 size-2.5 rounded-full bg-online ring-2 ring-bg" />
-          ) : null}
-        </div>
-        <div className="px-3 pt-2.5">
-          <h3 className="flex items-center gap-1 truncate font-medium">
-            {person.name}
-            {person.verified || person.isAdmin ? <BadgeCheck className="size-3.5 shrink-0 text-primary" /> : null}
-          </h3>
-          <p className="truncate text-xs text-muted">
-            {person.role || person.intent || person.city}
-            {person.distanceKm != null ? ` · ${formatKm(person.distanceKm)}` : ""}
-          </p>
-        </div>
-      </Link>
-      <div className="flex justify-end gap-1 p-2">
-        <Button
-          size="icon"
-          variant="ghost"
-          className="size-10"
-          disabled={requested}
-          onClick={onRequest}
-          aria-label="اهتمام"
-        >
-          <UserPlus className={cn("size-4", requested && "text-primary")} />
-        </Button>
-        <Link to="/chat/$peerId" params={{ peerId: person.userId }}>
-          <Button size="icon" variant="ghost" className="size-10" aria-label="محادثة">
-            <MessageCircle className="size-4" />
           </Button>
         </Link>
       </div>

@@ -30,6 +30,7 @@ export type Profile = {
   latitude?: number | null;
   longitude?: number | null;
   createdAt?: string;
+  serial: string;
 };
 
 export function isProfileComplete(p: Pick<Profile, "name" | "role" | "intent">): boolean {
@@ -45,6 +46,7 @@ export type ChatPreview = {
   unread: number;
   lastDelivered: boolean;
   lastSeen: boolean;
+  isRequest: boolean;
 };
 
 export type MsgType = "text" | "image" | "video" | "file" | "voice";

@@ -63,7 +63,7 @@ export const addStory = createServerFn({ method: "POST" })
       .object({
         type: z.enum(["image", "video", "text"]),
         text: z.string().max(180).optional(),
-        fileUrl: z.string().max(450_000).nullable().optional(),
+        fileUrl: z.string().max(2_000_000).nullable().optional(),
       })
       .parse(d),
   )
@@ -306,8 +306,8 @@ export const sendRoomMessage = createServerFn({ method: "POST" })
         roomId: z.number().int(),
         text: z.string().max(2000),
         type: z.enum(["text", "image", "video", "file", "voice"]).default("text"),
-        fileUrl: z.string().max(450_000).nullable().optional(),
-        durationSec: z.number().int().min(0).max(180).optional(),
+        fileUrl: z.string().max(2_000_000).nullable().optional(),
+        durationSec: z.number().int().min(0).max(1800).optional(),
       })
       .parse(d),
   )
@@ -346,7 +346,7 @@ export const requestVerify = createServerFn({ method: "POST" })
       insert into verify_requests (user_id, note, status)
       values (${context.userId}, ${data.note ?? ""}, ${"pending"})
     `;
-    await notifyAdmins("verify", context.userId, "طلب توثيق");
+    await notifyAdmins("verify", context.userId, `طلب توثيق من ${me.name}`);
     return { ok: true as const, already: false };
   });
 
@@ -360,7 +360,7 @@ export const contactAdmin = createServerFn({ method: "POST" })
       insert into admin_inbox (user_id, body, status)
       values (${context.userId}, ${data.body.trim()}, ${"open"})
     `;
-    await notifyAdmins("mail", context.userId, "طلب تواصل مع الإدارة");
+    await notifyAdmins("mail", context.userId, `رسالة للإدارة من ${(await ensureMe(context.userId)).name}`);
     return { ok: true as const };
   });
 
@@ -672,4 +672,35 @@ export const adminGetPeople = createServerFn({ method: "GET" })
       if (rows[0]) out.push(toProfile(rows[0]));
     }
     return out;
+  });
+
+export const acceptThread = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((d: { peerId: string }) => z.object({ peerId: z.string().min(1) }).parse(d))
+  .handler(async ({ context, data }) => {
+    const { allowThread } = await import("./server");
+    await allowThread(context.userId, data.peerId);
+    return { ok: true as const };
+  });
+
+export const getAdminBadge = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const me = await ensureMe(context.userId);
+    if (!me.isAdmin) return { reports: 0, verify: 0, mail: 0 };
+    const sql = await getSql();
+    const reports = await sql<{ n: number }>`select count(*)::int as n from reports where status = 'open'`;
+    const verify = await sql<{ n: number }>`select count(*)::int as n from verify_requests where status = 'pending'`;
+    const mail = await sql<{ n: number }>`select count(*)::int as n from admin_inbox where status = 'open'`;
+    return {
+      reports: reports[0]?.n ?? 0,
+      verify: verify[0]?.n ?? 0,
+      mail: mail[0]?.n ?? 0,
+    };
+  });
+
+export const blobStatus = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async () => {
+    return { ok: Boolean(process.env.BLOB_READ_WRITE_TOKEN) };
   });

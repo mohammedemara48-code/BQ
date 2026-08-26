@@ -1,5 +1,7 @@
 /** Saved logins so the visitor can switch accounts without typing again. */
 
+import { authClient } from "@/lib/auth/client";
+
 const ACCOUNTS_KEY = "bq.accounts";
 const BEARER_KEY = "grok-auth.bearer-token";
 
@@ -39,31 +41,52 @@ function writeRaw(list: SavedAccount[]) {
   }
 }
 
-export function hasBearerToken(): boolean {
-  if (typeof window === "undefined") return false;
+function readBearer(): string {
+  if (typeof window === "undefined") return "";
   try {
-    return Boolean(window.sessionStorage.getItem(BEARER_KEY)?.length);
+    return window.sessionStorage.getItem(BEARER_KEY) ?? "";
   } catch {
-    return false;
+    return "";
   }
+}
+
+function writeBearer(token: string) {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(BEARER_KEY, token);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function hasBearerToken(): boolean {
+  return Boolean(readBearer().length);
 }
 
 export function listAccounts(): SavedAccount[] {
   return readRaw();
 }
 
-export function rememberAccount(partial: {
+export async function rememberAccount(partial: {
   id: string;
   name?: string | null;
   email?: string | null;
   photo?: string | null;
-}): void {
+}): Promise<void> {
   if (typeof window === "undefined") return;
-  let token = "";
-  try {
-    token = window.sessionStorage.getItem(BEARER_KEY) ?? "";
-  } catch {
-    token = "";
+  let token = readBearer();
+  if (!token) {
+    try {
+      const sess = await authClient.getSession();
+      const raw = sess.data as { session?: { token?: string } } | null;
+      const next = raw?.session?.token;
+      if (typeof next === "string" && next.length > 8) {
+        token = next;
+        writeBearer(next);
+      }
+    } catch {
+      /* cookie session without exposed token */
+    }
   }
   const prev = readRaw().filter((a) => a.id !== partial.id);
   const existing = readRaw().find((a) => a.id === partial.id);
@@ -79,14 +102,15 @@ export function rememberAccount(partial: {
   ]);
 }
 
-export function switchAccount(id: string): boolean {
+export async function switchAccount(id: string): Promise<boolean> {
   const hit = readRaw().find((a) => a.id === id);
   if (!hit?.token) return false;
   try {
-    window.sessionStorage.setItem(BEARER_KEY, hit.token);
+    await authClient.signOut();
   } catch {
-    return false;
+    /* leftover cookie session — still swap bearer */
   }
+  writeBearer(hit.token);
   window.location.assign("/?tab=me");
   return true;
 }

@@ -5,11 +5,13 @@ import { toast } from "sonner";
 import { Avatar } from "@/components/avatar";
 import { ChatComposer } from "@/components/chat-composer";
 import { DmBubble } from "@/components/message-bubble";
+import { Button } from "@/components/ui/button";
 import { RedirectToSignIn } from "@/lib/auth/gates";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import {
   findPerson,
   useBqMutations,
+  useChats,
   useMe,
   useMessages,
   usePeople,
@@ -29,7 +31,8 @@ function ChatPage() {
   const me = useMe();
   const remote = usePerson(peerId);
   const messages = useMessages(peerId);
-  const { send, reveal, askPrivate, report } = useBqMutations();
+  const chats = useChats();
+  const { send, reveal, askPrivate, report, acceptMsg } = useBqMutations();
   const scroller = useRef<HTMLDivElement>(null);
   const person = remote.data ?? findPerson(people.data, me.data, peerId);
 
@@ -48,6 +51,7 @@ function ChatPage() {
   if (!user) return <RedirectToSignIn />;
 
   const name = person?.name ?? "محادثة";
+  const isRequest = Boolean((chats.data ?? []).find((c) => c.peerId === peerId)?.isRequest);
 
   return (
     <div className="mx-auto flex min-h-dvh w-full max-w-lg flex-col bg-bg">
@@ -113,6 +117,19 @@ function ChatPage() {
       </header>
 
       <div ref={scroller} className="flex-1 space-y-2 overflow-y-auto px-3 py-4">
+        {isRequest ? (
+          <div className="mx-auto mb-3 max-w-sm rounded-lg border border-primary/30 bg-elevated px-3 py-3 text-center">
+            <p className="text-sm text-muted">طلب مراسلة — القبول ينقلها للمحادثات</p>
+            <Button
+              size="sm"
+              className="mt-2"
+              onClick={() => acceptMsg.mutate(peerId)}
+              disabled={acceptMsg.isPending}
+            >
+              قبول المراسلة
+            </Button>
+          </div>
+        ) : null}
         {(messages.data ?? []).map((m) => {
           const mine = m.senderId === me.data?.userId;
           return (

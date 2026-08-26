@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { getSql } from "@/lib/db";
 import { authMiddleware } from "@/lib/auth/middleware";
-import { haversineKm, pairIds } from "@/lib/utils";
+import { haversineKm, normalizeSerial, pairIds } from "@/lib/utils";
 import { isCommunityId } from "./community";
 import type {
   CallLog,
@@ -30,6 +30,7 @@ export type ProfileRow = {
   is_community: boolean;
   is_admin: boolean;
   verified: boolean;
+  serial: string;
   latitude: number | null;
   longitude: number | null;
   created_at: string;
@@ -57,6 +58,7 @@ export function toProfile(
     includePrivate?: boolean;
     granted?: boolean;
     distanceKm?: number | null;
+    includeMap?: boolean;
   } = {},
 ): Profile {
   const gallery = parseList(row.gallery ?? "[]");
@@ -77,6 +79,7 @@ export function toProfile(
     isCommunity: row.is_community,
     isAdmin,
     verified: Boolean(row.verified) || isAdmin,
+    serial: row.serial || "",
     role: (row.role as Role) || "",
     intent: (row.intent as Intent) || "",
     phone: opts.includeCoords ? row.phone || "" : "",
@@ -86,8 +89,8 @@ export function toProfile(
     hasPrivate: priv.length > 0,
     privateGranted: Boolean(opts.granted) || showPrivate,
     distanceKm: opts.distanceKm ?? null,
-    latitude: opts.includeCoords ? row.latitude : null,
-    longitude: opts.includeCoords ? row.longitude : null,
+    latitude: opts.includeCoords || opts.includeMap ? row.latitude : null,
+    longitude: opts.includeCoords || opts.includeMap ? row.longitude : null,
     createdAt: row.created_at,
   };
 }
@@ -159,6 +162,42 @@ export async function blockedSet(userId: string): Promise<Set<string>> {
   return new Set(rows.map((r) => r.other));
 }
 
+const SERIAL_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+function mintSerial(): string {
+  let out = "BQ-";
+  for (let i = 0; i < 6; i++) out += SERIAL_CHARS[Math.floor(Math.random() * SERIAL_CHARS.length)];
+  return out;
+}
+
+export async function allowThread(userId: string, peerId: string) {
+  if (!peerId || userId === peerId) return;
+  const sql = await getSql();
+  await sql`
+    insert into message_allow (user_id, peer_id)
+    values (${userId}, ${peerId})
+    on conflict do nothing
+  `;
+}
+
+async function ensureSerial(userId: string) {
+  const sql = await getSql();
+  const have = await sql<{ serial: string | null }>`
+    select serial from profiles where user_id = ${userId} limit 1
+  `;
+  if (have[0]?.serial) return have[0].serial;
+  for (let i = 0; i < 10; i++) {
+    const serial = mintSerial();
+    const clash = await sql<{ n: number }>`
+      select count(*)::int as n from profiles where serial = ${serial}
+    `;
+    if ((clash[0]?.n ?? 0) > 0) continue;
+    await sql`update profiles set serial = ${serial} where user_id = ${userId} and (serial is null or serial = '')`;
+    return serial;
+  }
+  return "";
+}
+
 export async function ensureMe(
   userId: string,
   hint?: { name?: string | null; image?: string | null },
@@ -171,6 +210,7 @@ export async function ensureMe(
   if (existing[0]) {
     await sql`update profiles set online = true, updated_at = now() where user_id = ${userId}`;
     if (!existing[0].is_admin) await claimOwnerIfOpen(userId);
+    await ensureSerial(userId);
     const fresh = await sql<ProfileRow>`select * from profiles where user_id = ${userId} limit 1`;
     return toProfile({ ...fresh[0]!, online: true }, { includeCoords: true, includePrivate: true, granted: true });
   }
@@ -181,6 +221,7 @@ export async function ensureMe(
     values (${userId}, ${name}, ${photo}, ${true}, ${false}, ${"تعارف"}, ${""}, ${false})
   `;
   await claimOwnerIfOpen(userId);
+  await ensureSerial(userId);
   const created = await sql<ProfileRow>`select * from profiles where user_id = ${userId}`;
   return toProfile(created[0]!, { includeCoords: true, includePrivate: true, granted: true });
 }
@@ -213,10 +254,14 @@ export const listPeople = createServerFn({ method: "GET" })
       select * from profiles
       where user_id <> ${context.userId}
         and is_community = false
-        and (length(trim(bio)) > 0 or length(trim(photo_url)) > 0 or length(trim(role)) > 0)
       order by online desc, name asc
     `;
-    return rows
+    const filled = [];
+    for (const r of rows) {
+      if (r.serial) filled.push(r);
+      else filled.push({ ...r, serial: await ensureSerial(r.user_id) });
+    }
+    return filled
       .filter((r) => !blocked.has(r.user_id))
       .map((r) => {
         let distanceKm: number | null = null;
@@ -229,7 +274,7 @@ export const listPeople = createServerFn({ method: "GET" })
         ) {
           distanceKm = haversineKm(me.latitude, me.longitude, r.latitude, r.longitude);
         }
-        return toProfile(r, { distanceKm });
+        return toProfile(r, { distanceKm, includeMap: Boolean(r.show_on_map) });
       });
   });
 
@@ -243,14 +288,22 @@ export const getPerson = createServerFn({ method: "GET" })
     const blocked = await blockedSet(context.userId);
     if (blocked.has(data.id)) return null;
     const sql = await getSql();
-    const rows = await sql<ProfileRow>`
-      select * from profiles where user_id = ${data.id} and is_community = false limit 1
-    `;
+    const serial = normalizeSerial(data.id);
+    const rows = serial
+      ? await sql<ProfileRow>`
+          select * from profiles
+          where serial = ${serial} and is_community = false
+          limit 1
+        `
+      : await sql<ProfileRow>`
+          select * from profiles where user_id = ${data.id} and is_community = false limit 1
+        `;
     const row = rows[0];
     if (!row) return null;
+    if (blocked.has(row.user_id)) return null;
     const grant = await sql<{ n: number }>`
       select count(*)::int as n from photo_access
-      where owner_id = ${data.id} and viewer_id = ${context.userId}
+      where owner_id = ${row.user_id} and viewer_id = ${context.userId}
     `;
     const granted = (grant[0]?.n ?? 0) > 0;
     return toProfile(row, { includePrivate: granted, granted });
@@ -352,8 +405,16 @@ export const listChats = createServerFn({ method: "GET" })
       unread: r.unread ?? 0,
       lastDelivered: Boolean(r.delivered),
       lastSeen: Boolean(r.seen_at),
+      isRequest: false,
     }));
-    return previews;
+    const allowed = await sql<{ peer_id: string }>`
+      select peer_id from message_allow where user_id = ${me}
+    `;
+    const allow = new Set(allowed.map((x) => x.peer_id));
+    return previews.map((p) => ({
+      ...p,
+      isRequest: !allow.has(p.peerId) && p.lastSenderId !== me,
+    }));
   });
 
 export const listMessages = createServerFn({ method: "GET" })
@@ -416,9 +477,9 @@ const sendInput = z.object({
   peerId: z.string().min(1).max(120),
   text: z.string().max(2000),
   type: z.enum(["text", "image", "video", "file", "voice"]).default("text"),
-  fileUrl: z.string().max(450_000).nullable().optional(),
+  fileUrl: z.string().max(2_000_000).nullable().optional(),
   viewOnce: z.boolean().optional(),
-  durationSec: z.number().int().min(0).max(180).optional(),
+  durationSec: z.number().int().min(0).max(1800).optional(),
 });
 
 export const sendMessage = createServerFn({ method: "POST" })
@@ -438,6 +499,7 @@ export const sendMessage = createServerFn({ method: "POST" })
         ${data.fileUrl ?? null}, ${data.viewOnce ?? false}, ${data.durationSec ?? 0}, ${false}
       )
     `;
+    await allowThread(context.userId, data.peerId);
     return { ok: true as const };
   });
 
@@ -507,7 +569,7 @@ export const sendRequest = createServerFn({ method: "POST" })
       on conflict (from_id, to_id) do nothing
     `;
     if (status === "pending") {
-      await notify(data.peerId, "request", context.userId, "طلب صداقة");
+      await notify(data.peerId, "request", context.userId, "طلب متابعة");
     }
     return { ok: true as const, status };
   });
@@ -529,7 +591,9 @@ export const respondRequest = createServerFn({ method: "POST" })
     `;
     const fromId = rows[0]?.from_id;
     if (fromId && data.accept) {
-      await notify(fromId, "accepted", context.userId, "تم قبول طلبك");
+      await allowThread(context.userId, fromId);
+      await allowThread(fromId, context.userId);
+      await notify(fromId, "accepted", context.userId, "تم قبول متابعتك");
     }
     return { ok: true as const };
   });

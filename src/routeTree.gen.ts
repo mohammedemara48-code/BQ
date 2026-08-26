@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as LoginRouteImport } from './routes/login'
+import { Route as ApiBlobRouteImport } from './routes/api/blob'
 import { Route as CallPeerIdRouteImport } from './routes/call.$peerId'
 import { Route as ChatPeerIdRouteImport } from './routes/chat.$peerId'
 import { Route as ModThreadRouteImport } from './routes/mod.thread'
@@ -26,6 +27,11 @@ const IndexRoute = IndexRouteImport.update({
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
   path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiBlobRoute = ApiBlobRouteImport.update({
+  id: '/api/blob',
+  path: '/api/blob',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CallPeerIdRoute = CallPeerIdRouteImport.update({
@@ -62,6 +68,7 @@ const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
+  '/api/blob': typeof ApiBlobRoute
   '/call/$peerId': typeof CallPeerIdRoute
   '/chat/$peerId': typeof ChatPeerIdRoute
   '/mod/thread': typeof ModThreadRoute
@@ -72,6 +79,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
+  '/api/blob': typeof ApiBlobRoute
   '/call/$peerId': typeof CallPeerIdRoute
   '/chat/$peerId': typeof ChatPeerIdRoute
   '/mod/thread': typeof ModThreadRoute
@@ -83,6 +91,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
+  '/api/blob': typeof ApiBlobRoute
   '/call/$peerId': typeof CallPeerIdRoute
   '/chat/$peerId': typeof ChatPeerIdRoute
   '/mod/thread': typeof ModThreadRoute
@@ -95,6 +104,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/login'
+    | '/api/blob'
     | '/call/$peerId'
     | '/chat/$peerId'
     | '/mod/thread'
@@ -105,6 +115,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/login'
+    | '/api/blob'
     | '/call/$peerId'
     | '/chat/$peerId'
     | '/mod/thread'
@@ -115,6 +126,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/login'
+    | '/api/blob'
     | '/call/$peerId'
     | '/chat/$peerId'
     | '/mod/thread'
@@ -126,6 +138,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   LoginRoute: typeof LoginRoute
+  ApiBlobRoute: typeof ApiBlobRoute
   CallPeerIdRoute: typeof CallPeerIdRoute
   ChatPeerIdRoute: typeof ChatPeerIdRoute
   ModThreadRoute: typeof ModThreadRoute
@@ -148,6 +161,13 @@ declare module '@tanstack/react-router' {
       path: '/login'
       fullPath: '/login'
       preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/blob': {
+      id: '/api/blob'
+      path: '/api/blob'
+      fullPath: '/api/blob'
+      preLoaderRoute: typeof ApiBlobRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/call/$peerId': {
@@ -198,6 +218,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   LoginRoute: LoginRoute,
+  ApiBlobRoute: ApiBlobRoute,
   CallPeerIdRoute: CallPeerIdRoute,
   ChatPeerIdRoute: ChatPeerIdRoute,
   ModThreadRoute: ModThreadRoute,

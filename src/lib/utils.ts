@@ -9,6 +9,14 @@ export function pairIds(a: string, b: string): [string, string] {
   return a < b ? [a, b] : [b, a];
 }
 
+export function normalizeSerial(raw: string): string | null {
+  const compact = raw.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const body = compact.startsWith("BQ") ? compact.slice(2) : compact;
+  if (!/^[A-Z0-9]{6}$/.test(body)) return null;
+  return `BQ-${body}`;
+}
+
+
 export function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) return "؟";

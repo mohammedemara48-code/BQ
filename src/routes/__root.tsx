@@ -9,6 +9,7 @@ import { AuthProvider } from "@/lib/auth/provider";
 import { PreviewHostBridge } from "@/components/preview-host-bridge";
 import { PwaRegister } from "@/components/pwa-register";
 import { QueryProvider } from "@/components/query-provider";
+import { CallLayer } from "@/components/call-layer";
 import appCss from "../styles.css?url";
 
 const APP_NAME = "BQ";
@@ -61,6 +62,7 @@ function RootDocument() {
         <AuthProvider>
           <QueryProvider>
             <Outlet />
+            <CallLayer />
             <Toaster
               theme="dark"
               position="top-center"

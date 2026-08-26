@@ -1,4 +1,4 @@
-/** Repeating ringtone while a call is ringing. Stops cleanly on hang-up. */
+/** Phone-style ringtone: keeps looping until the caller hangs or answers. */
 export function startRingtone(): () => void {
   const AudioCtx =
     window.AudioContext ||
@@ -8,35 +8,36 @@ export function startRingtone(): () => void {
   let stopped = false;
   let timer = 0;
 
-  function beep() {
-    if (stopped) return;
+  function tone(freq: number, at: number, dur: number, vol = 0.2) {
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = "sine";
-    osc.frequency.value = 440;
-    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.18, ctx.currentTime + 0.03);
-    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.42);
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime + at);
+    gain.gain.exponentialRampToValueAtTime(vol, ctx.currentTime + at + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + at + dur);
     osc.connect(gain);
     gain.connect(ctx.destination);
-    osc.start();
-    osc.stop(ctx.currentTime + 0.45);
-    const osc2 = ctx.createOscillator();
-    const gain2 = ctx.createGain();
-    osc2.type = "sine";
-    osc2.frequency.value = 554;
-    gain2.gain.setValueAtTime(0.0001, ctx.currentTime + 0.48);
-    gain2.gain.exponentialRampToValueAtTime(0.16, ctx.currentTime + 0.52);
-    gain2.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.9);
-    osc2.connect(gain2);
-    gain2.connect(ctx.destination);
-    osc2.start(ctx.currentTime + 0.48);
-    osc2.stop(ctx.currentTime + 0.92);
+    osc.start(ctx.currentTime + at);
+    osc.stop(ctx.currentTime + at + dur + 0.02);
+  }
+
+  function cycle() {
+    if (stopped) return;
+    // dual-tone burst, repeated — no dead air longer than a beat
+    tone(440, 0, 0.38);
+    tone(554, 0, 0.38, 0.16);
+    tone(440, 0.42, 0.38);
+    tone(554, 0.42, 0.38, 0.16);
+    tone(440, 0.84, 0.38);
+    tone(554, 0.84, 0.38, 0.16);
+    tone(440, 1.26, 0.38);
+    tone(554, 1.26, 0.38, 0.16);
   }
 
   void ctx.resume();
-  beep();
-  timer = window.setInterval(beep, 1600);
+  cycle();
+  timer = window.setInterval(cycle, 2000);
 
   return () => {
     stopped = true;

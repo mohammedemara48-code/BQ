@@ -4,8 +4,8 @@ import { toast } from "sonner";
 import { Avatar } from "@/components/avatar";
 import { Button } from "@/components/ui/button";
 import { useBqMutations, useMe, usePeople, useStories } from "@/lib/bq/hooks";
+import { uploadMedia } from "@/lib/bq/upload";
 import type { Story } from "@/lib/bq/types";
-import { compressImage, fileToDataUrl } from "@/lib/utils";
 
 export function StoriesTray() {
   const stories = useStories();
@@ -15,6 +15,7 @@ export function StoriesTray() {
   const fileRef = useRef<HTMLInputElement>(null);
   const [viewer, setViewer] = useState<Story[] | null>(null);
   const [idx, setIdx] = useState(0);
+  const [busy, setBusy] = useState(false);
 
   const groups = useMemo(() => {
     const by = new Map<string, Story[]>();
@@ -32,13 +33,16 @@ export function StoriesTray() {
 
   async function add(file: File | undefined) {
     if (!file) return;
+    setBusy(true);
     try {
       const isVideo = file.type.startsWith("video/");
-      const url = isVideo ? await fileToDataUrl(file) : await compressImage(file, 720);
+      const url = await uploadMedia(file, isVideo ? "video" : "image");
       await postStory.mutateAsync({ type: isVideo ? "video" : "image", fileUrl: url });
       toast.success("نُشرت الحالة");
     } catch {
-      toast.error("الملف أكبر من المسموح");
+      toast.error("تعذر نشر الحالة");
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -57,6 +61,7 @@ export function StoriesTray() {
           type="button"
           className="flex w-16 shrink-0 flex-col items-center gap-1.5"
           onClick={() => fileRef.current?.click()}
+          disabled={busy}
         >
           <span className="relative">
             <Avatar name={me.data?.name ?? "أنت"} src={me.data?.photoUrl} size="md" />
@@ -64,15 +69,12 @@ export function StoriesTray() {
               <Plus className="size-3" />
             </span>
           </span>
-          <span className="w-full truncate text-center text-xs text-muted">حالتي</span>
+          <span className="w-full truncate text-center text-xs text-muted">
+            {busy ? "رفع…" : "حالتي"}
+          </span>
         </button>
         {mine ? (
-          <StoryChip
-            name="أنت"
-            photo={me.data?.photoUrl}
-            onClick={() => open(mine[1])}
-            live
-          />
+          <StoryChip name="أنت" photo={me.data?.photoUrl} onClick={() => open(mine[1])} live />
         ) : null}
         {others.map(([id, list]) => {
           const p = byId.get(id);
@@ -99,10 +101,7 @@ export function StoriesTray() {
         <div className="fixed inset-0 z-50 flex flex-col bg-bg">
           <div className="flex gap-1 px-3 pt-3">
             {viewer.map((s, i) => (
-              <span
-                key={s.id}
-                className="h-1 flex-1 rounded-full bg-elevated"
-              >
+              <span key={s.id} className="h-1 flex-1 rounded-full bg-elevated">
                 <span
                   className="block h-full rounded-full bg-primary"
                   style={{ width: i < idx ? "100%" : i === idx ? "100%" : "0%" }}
@@ -164,11 +163,7 @@ function StoryChip({
   live?: boolean;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="flex w-16 shrink-0 flex-col items-center gap-1.5"
-    >
+    <button type="button" onClick={onClick} className="flex w-16 shrink-0 flex-col items-center gap-1.5">
       <span className={live ? "rounded-full bg-primary p-[2px]" : ""}>
         <Avatar name={name} src={photo} size="md" />
       </span>

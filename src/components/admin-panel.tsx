@@ -5,8 +5,10 @@ import { toast } from "sonner";
 import { Avatar } from "@/components/avatar";
 import { Button } from "@/components/ui/button";
 import {
+  useAdminBadge,
   useAdminMail,
   useAdminReports,
+  useBlobStatus,
   useBqMutations,
   useMembers,
   useVerifyRequests,
@@ -17,32 +19,55 @@ type Pane = "members" | "reports" | "verify" | "mail";
 
 export function AdminPanel({ enabled }: { enabled: boolean }) {
   const [pane, setPane] = useState<Pane>("reports");
+  const badge = useAdminBadge(enabled);
+  const blob = useBlobStatus(enabled);
+  const counts = badge.data ?? { reports: 0, verify: 0, mail: 0 };
+
   return (
-    <section className="mt-8 rounded-xl border border-primary/30 bg-surface p-4">
-      <div className="flex items-center gap-2">
-        <Shield className="size-4 text-primary" />
-        <h2 className="font-medium">لوحة الإدارة</h2>
+    <div className="bq-enter px-4 pb-10 pt-2">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Shield className="size-4 text-primary" />
+          <h1 className="font-medium">لوحة الإدارة</h1>
+        </div>
+        <p className={cn("text-xs", blob.data?.ok ? "text-online" : "text-muted")}>
+          {blob.isPending
+            ? "فحص التخزين…"
+            : blob.data?.ok
+              ? "التخزين السحابي متصل"
+              : "التخزين المحلي فقط"}
+        </p>
       </div>
       <div className="mt-3 grid grid-cols-4 gap-1 rounded-lg bg-elevated p-1">
         {(
           [
-            ["reports", "بلاغات", Flag],
-            ["verify", "توثيق", BadgeCheck],
-            ["mail", "تواصل", Mail],
-            ["members", "أعضاء", Users],
+            ["reports", "بلاغات", Flag, counts.reports],
+            ["verify", "توثيق", BadgeCheck, counts.verify],
+            ["mail", "تواصل", Mail, counts.mail],
+            ["members", "أعضاء", Users, 0],
           ] as const
-        ).map(([id, label, Icon]) => (
+        ).map(([id, label, Icon, count]) => (
           <button
             key={id}
             type="button"
             onClick={() => setPane(id)}
             className={cn(
-              "flex h-11 flex-col items-center justify-center rounded-md text-[10px]",
+              "relative flex h-14 flex-col items-center justify-center rounded-md text-[10px]",
               pane === id ? "bg-primary text-primary-fg" : "text-muted",
             )}
           >
             <Icon className="size-4" />
             {label}
+            {count > 0 ? (
+              <span
+                className={cn(
+                  "absolute top-1 end-1 grid min-w-4 place-items-center rounded-full px-1 text-[9px]",
+                  pane === id ? "bg-primary-fg text-primary" : "bg-primary text-primary-fg",
+                )}
+              >
+                {count}
+              </span>
+            ) : null}
           </button>
         ))}
       </div>
@@ -50,7 +75,7 @@ export function AdminPanel({ enabled }: { enabled: boolean }) {
       {pane === "reports" ? <ReportsPane enabled={enabled} /> : null}
       {pane === "verify" ? <VerifyPane enabled={enabled} /> : null}
       {pane === "mail" ? <MailPane enabled={enabled} /> : null}
-    </section>
+    </div>
   );
 }
 
@@ -80,7 +105,9 @@ function MembersPane({ enabled }: { enabled: boolean }) {
                 {m.name}
                 {m.isAdmin ? <span className="ms-2 text-[10px] text-primary">مالك</span> : null}
               </p>
-              <p className="truncate text-[11px] text-muted">{m.city || "بدون مدينة"}</p>
+              <p className="truncate text-[11px] text-muted" dir="ltr">
+                {m.serial || m.city || "بدون مدينة"}
+              </p>
             </div>
             {m.isAdmin ? null : (
               <Button

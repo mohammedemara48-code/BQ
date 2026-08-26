@@ -12,8 +12,9 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { uploadMedia } from "@/lib/bq/upload";
 import type { MsgType } from "@/lib/bq/types";
-import { cn, compressImage, fileToDataUrl, formatDuration } from "@/lib/utils";
+import { cn, formatDuration } from "@/lib/utils";
 
 type Draft = {
   type: MsgType;
@@ -39,6 +40,7 @@ export function ChatComposer({
   const [draft, setDraft] = useState<Draft | null>(null);
   const [rec, setRec] = useState<"off" | "on">("off");
   const [elapsed, setElapsed] = useState(0);
+  const [uploading, setUploading] = useState(false);
   const photoRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -58,21 +60,19 @@ export function ChatComposer({
   async function pick(kind: "image" | "video" | "file", file: File | undefined) {
     setMenu(false);
     if (!file) return;
+    setUploading(true);
     try {
-      if (kind === "image") {
-        const url = await compressImage(file, 960);
-        setDraft({ type: "image", url, name: file.name, durationSec: 0 });
-        return;
-      }
-      const url = await fileToDataUrl(file);
+      const url = await uploadMedia(file, kind === "file" ? "file" : kind);
       setDraft({
-        type: kind === "video" ? "video" : "file",
+        type: kind === "image" ? "image" : kind === "video" ? "video" : "file",
         url,
         name: file.name,
         durationSec: 0,
       });
     } catch {
-      toast.error("الملف أكبر من المسموح");
+      toast.error("تعذر رفع الملف");
+    } finally {
+      setUploading(false);
     }
   }
 
@@ -97,27 +97,28 @@ export function ChatComposer({
           setElapsed(0);
           return;
         }
-        const blob = new Blob(chunks.current, { type: recoder.mimeType });
+        const blob = new Blob(chunks.current, { type: recoder.mimeType || "audio/webm" });
         const dur = Math.max(1, Math.round((Date.now() - started.current) / 1000));
-        if (blob.size > 380_000) {
-          toast.error("التسجيل طويل — أعد محاولة أقصر");
-          setRec("off");
-          return;
-        }
-        const url = await new Promise<string>((resolve, reject) => {
-          const r = new FileReader();
-          r.onload = () => resolve(String(r.result ?? ""));
-          r.onerror = () => reject(r.error);
-          r.readAsDataURL(blob);
-        });
-        setDraft({ type: "voice", url, name: "صوت", durationSec: dur });
         setRec("off");
+        setUploading(true);
+        try {
+          const file = new File([blob], `voice-${Date.now()}.webm`, {
+            type: (blob.type || "audio/webm").split(";")[0],
+          });
+          const url = await uploadMedia(file, "audio");
+          setDraft({ type: "voice", url, name: "صوت", durationSec: dur });
+        } catch {
+          toast.error("تعذر رفع التسجيل");
+        } finally {
+          setUploading(false);
+          setElapsed(0);
+        }
       };
       media.current = recoder;
       started.current = Date.now();
       setElapsed(0);
       setRec("on");
-      recoder.start();
+      recoder.start(1000);
     } catch {
       toast.error("الميكروفون غير متاح");
     }
@@ -133,7 +134,7 @@ export function ChatComposer({
   }
 
   async function sendDraft() {
-    if (!draft || busy) return;
+    if (!draft || busy || uploading) return;
     const d = draft;
     setDraft(null);
     await onSend({
@@ -151,8 +152,14 @@ export function ChatComposer({
     await onSend({ text: t, type: "text" });
   }
 
+  const blocked = busy || uploading;
+
   return (
     <div className="border-t border-border bg-surface px-2 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+      {uploading ? (
+        <p className="mb-2 px-2 text-xs text-muted">جاري الرفع…</p>
+      ) : null}
+
       {draft ? (
         <div className="mb-2 flex items-center gap-2 rounded-lg bg-elevated px-3 py-2">
           {draft.type === "image" ? (
@@ -178,7 +185,7 @@ export function ChatComposer({
           <button type="button" onClick={() => setDraft(null)} aria-label="حذف" className="grid size-11 place-items-center">
             <Trash2 className="size-4 text-danger" />
           </button>
-          <Button size="sm" disabled={busy} onClick={() => void sendDraft()}>
+          <Button size="sm" disabled={blocked} onClick={() => void sendDraft()}>
             إرسال
           </Button>
         </div>
@@ -220,69 +227,71 @@ export function ChatComposer({
       ) : null}
 
       {menu ? (
-        <div className="mb-2 grid grid-cols-4 gap-2">
-          <AttachBtn
-            icon={ImagePlus}
-            label="صورة"
-            onClick={() => photoRef.current?.click()}
-          />
+        <div className="mb-2 grid grid-cols-3 gap-2">
+          <AttachBtn icon={ImagePlus} label="صورة" onClick={() => photoRef.current?.click()} />
           <AttachBtn icon={Video} label="فيديو" onClick={() => videoRef.current?.click()} />
           <AttachBtn icon={FileUp} label="ملف" onClick={() => fileRef.current?.click()} />
-          <AttachBtn icon={Mic} label="صوت" onClick={() => void startRec()} />
         </div>
       ) : null}
 
-      <form
-        className="flex items-end gap-1.5"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void sendText();
-        }}
-      >
-        <input
-          ref={photoRef}
-          type="file"
-          accept="image/*"
-          hidden
-          onChange={(e) => void pick("image", e.target.files?.[0])}
-        />
-        <input
-          ref={videoRef}
-          type="file"
-          accept="video/*"
-          hidden
-          onChange={(e) => void pick("video", e.target.files?.[0])}
-        />
-        <input
-          ref={fileRef}
-          type="file"
-          hidden
-          onChange={(e) => void pick("file", e.target.files?.[0])}
-        />
-        <Button
-          type="button"
-          size="icon"
-          variant="ghost"
-          aria-label="إرفاق"
-          onClick={() => setMenu((v) => !v)}
+      {rec === "on" ? null : (
+        <form
+          className="flex items-end gap-1.5"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void sendText();
+          }}
         >
-          {menu ? <X className="size-5" /> : <Paperclip className="size-5" />}
-        </Button>
-        <input
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="رسالة"
-          className="h-11 min-w-0 flex-1 rounded-lg border border-border bg-elevated px-3 text-sm outline-none focus:border-primary/70"
-        />
-        <Button
-          type="submit"
-          size="icon"
-          disabled={!text.trim() || busy}
-          aria-label="إرسال"
-        >
-          <Send className="size-4 rtl:-scale-x-100" />
-        </Button>
-      </form>
+          <input
+            ref={photoRef}
+            type="file"
+            accept="image/*"
+            hidden
+            onChange={(e) => void pick("image", e.target.files?.[0])}
+          />
+          <input
+            ref={videoRef}
+            type="file"
+            accept="video/*"
+            hidden
+            onChange={(e) => void pick("video", e.target.files?.[0])}
+          />
+          <input
+            ref={fileRef}
+            type="file"
+            hidden
+            onChange={(e) => void pick("file", e.target.files?.[0])}
+          />
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            aria-label="إرفاق"
+            onClick={() => setMenu((v) => !v)}
+          >
+            {menu ? <X className="size-5" /> : <Paperclip className="size-5" />}
+          </Button>
+          <input
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder="رسالة"
+            className="h-11 min-w-0 flex-1 rounded-lg border border-border bg-elevated px-3 text-sm outline-none focus:border-primary/70"
+          />
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            aria-label="رسالة صوتية"
+            onClick={() => void startRec()}
+            disabled={blocked}
+          >
+            <Mic className="size-5" />
+          </Button>
+          <Button type="submit" size="icon" disabled={!text.trim() || blocked} aria-label="إرسال">
+            <Send className="size-4 rtl:-scale-x-100" />
+          </Button>
+        </form>
+      )}
     </div>
   );
 }

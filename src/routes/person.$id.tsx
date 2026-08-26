@@ -93,6 +93,11 @@ function PersonPage() {
           {person.distanceKm != null ? (
             <p className="mt-1 text-xs text-accent">{formatKm(person.distanceKm)}</p>
           ) : null}
+          {person.serial ? (
+            <p className="mt-1 text-xs text-subtle" dir="ltr">
+              {person.serial}
+            </p>
+          ) : null}
         </div>
       </div>
 
@@ -158,7 +163,7 @@ function PersonPage() {
             onClick={() => request.mutate(id)}
           >
             <Heart className="size-4" />
-            {already ? "تم" : "اهتمام"}
+            {already ? "تم" : "متابعة"}
           </Button>
           <Link to="/chat/$peerId" params={{ peerId: id }}>
             <Button variant="secondary" className="w-full">
@@ -198,7 +203,7 @@ function PersonPage() {
                 }}
               >
                 <UserMinus className="size-4" />
-                إلغاء صداقة
+                إلغاء المتابعة
               </Button>
             ) : null}
             <Button

@@ -26,11 +26,14 @@ import {
 import {
   addStory,
   adminListThread,
+  acceptThread,
+  blobStatus,
   closeAdminMail,
   contactAdmin,
   createRoom,
   decideVerify,
   deleteStory,
+  getAdminBadge,
   joinRoom,
   leaveRoom,
   listAdminMail,
@@ -175,6 +178,23 @@ export function useAdminThread(
   });
 }
 
+export function useAdminBadge(enabled = false) {
+  return useQuery({
+    queryKey: ["admin-badge"],
+    queryFn: () => getAdminBadge(),
+    enabled,
+    refetchInterval: enabled ? 6000 : false,
+  });
+}
+
+export function useBlobStatus(enabled = false) {
+  return useQuery({
+    queryKey: ["blob-status"],
+    queryFn: () => blobStatus(),
+    enabled,
+  });
+}
+
 type ProfilePatch = {
   name?: string;
   bio?: string;
@@ -213,6 +233,7 @@ export function useBqMutations() {
     void qc.invalidateQueries({ queryKey: ["verify-requests"] });
     void qc.invalidateQueries({ queryKey: ["admin-mail"] });
     void qc.invalidateQueries({ queryKey: ["admin-thread"] });
+    void qc.invalidateQueries({ queryKey: ["admin-badge"] });
   };
 
   const send = useMutation({
@@ -404,6 +425,11 @@ export function useBqMutations() {
     onSuccess: invalidateAll,
   });
 
+  const acceptMsg = useMutation({
+    mutationFn: (peerId: string) => acceptThread({ data: { peerId } }),
+    onSuccess: invalidateAll,
+  });
+
   return {
     send,
     request,
@@ -430,6 +456,7 @@ export function useBqMutations() {
     decideV,
     closeMail,
     closeReport,
+    acceptMsg,
   };
 }
 

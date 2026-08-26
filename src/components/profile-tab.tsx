@@ -1,7 +1,6 @@
-import { BadgeCheck, Camera, LogOut, Mail, MapPin, Shield, Users } from "lucide-react";
+import { BadgeCheck, Camera, Copy, LogOut, Mail, MapPin, QrCode, Shield, Users } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { AdminPanel } from "@/components/admin-panel";
 import { Avatar } from "@/components/avatar";
 import { Button } from "@/components/ui/button";
 import { Input, Label, Textarea } from "@/components/ui/input";
@@ -9,7 +8,8 @@ import { forgetAccount, listAccounts, switchAccount } from "@/lib/bq/accounts";
 import { signOut } from "@/lib/auth/client";
 import { useCurrentUser } from "@/lib/auth/use-current-user";
 import { signOutPresence } from "@/lib/bq/server";
-import { useBqMutations, useMe } from "@/lib/bq/hooks";
+import { useBqMutations, useBlobStatus, useMe } from "@/lib/bq/hooks";
+import { uploadMedia } from "@/lib/bq/upload";
 import { INTENTS, ROLES, type Intent, type Role } from "@/lib/bq/types";
 import { cn, compressImage } from "@/lib/utils";
 
@@ -17,6 +17,7 @@ export function ProfileTab() {
   const me = useMe();
   const user = useCurrentUser();
   const { saveMe, askVerify, mailAdmin, postStory } = useBqMutations();
+  const blob = useBlobStatus(true);
   const photoRef = useRef<HTMLInputElement>(null);
   const coverRef = useRef<HTMLInputElement>(null);
   const pubRef = useRef<HTMLInputElement>(null);
@@ -172,6 +173,22 @@ export function ProfileTab() {
             </p>
           ) : null}
           <p className="text-sm text-muted">{user?.primaryEmail}</p>
+          {p.serial ? (
+            <button
+              type="button"
+              className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-elevated px-3 py-1 text-xs text-muted"
+              dir="ltr"
+              onClick={() => {
+                void navigator.clipboard?.writeText(p.serial).then(
+                  () => toast.success("تم نسخ الرقم"),
+                  () => toast.error("تعذر النسخ"),
+                );
+              }}
+            >
+              <Copy className="size-3" />
+              {p.serial}
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -188,14 +205,17 @@ export function ProfileTab() {
           const file = e.target.files?.[0];
           if (!file) return;
           try {
-            const url = await compressImage(file, 720);
-            await postStory.mutateAsync({ type: "image", fileUrl: url });
+            const isVideo = file.type.startsWith("video/");
+            const url = await uploadMedia(file, isVideo ? "video" : "image");
+            await postStory.mutateAsync({ type: isVideo ? "video" : "image", fileUrl: url });
             toast.success("نُشرت الحالة");
           } catch {
             toast.error("تعذر نشر الحالة");
           }
         }}
       />
+
+      <SerialCard serial={p.serial} />
 
       <div className="mt-5 grid grid-cols-2 gap-2">
         <Button variant="secondary" onClick={() => storyRef.current?.click()}>
@@ -371,7 +391,9 @@ export function ProfileTab() {
                     )}
                     onClick={() => {
                       if (a.id === p.userId) return;
-                      if (!switchAccount(a.id)) toast.error("أعد دخول هذا الحساب");
+                      void switchAccount(a.id).then((ok) => {
+                        if (!ok) toast.error("أعد دخول هذا الحساب من شاشة الدخول");
+                      });
                     }}
                   >
                     <Avatar name={a.name} src={a.photo} size="sm" />
@@ -399,10 +421,39 @@ export function ProfileTab() {
           <LogOut className="size-4" />
           تسجيل الخروج
         </Button>
+        <p className="text-center text-[11px] text-subtle">
+          {blob.data?.ok ? "المساحة على التخزين السحابي" : "رفع محلي محدود — فعّل التخزين السحابي"}
+        </p>
       </div>
-
-      {p.isAdmin ? <AdminPanel enabled /> : null}
     </div>
+  );
+}
+
+function SerialCard({ serial }: { serial: string }) {
+  const [origin, setOrigin] = useState("");
+  useEffect(() => {
+    setOrigin(window.location.origin);
+  }, []);
+  if (!serial) return null;
+  const share = origin ? `${origin}/?s=${encodeURIComponent(serial)}` : serial;
+  const qr = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&bgcolor=ffffff&color=070711&data=${encodeURIComponent(share)}`;
+  return (
+    <section className="mt-4 rounded-xl border border-border bg-surface p-4">
+      <p className="mb-3 flex items-center gap-2 text-sm font-medium">
+        <QrCode className="size-4" />
+        باركود الحساب
+      </p>
+      <div className="flex items-center gap-4">
+        <img src={qr} alt="" width={110} height={110} className="size-[110px] rounded-lg bg-bg" />
+        <div className="min-w-0">
+          <p className="text-xs text-muted">الرقم التسلسلي</p>
+          <p className="font-display text-lg font-semibold tracking-wide" dir="ltr">
+            {serial}
+          </p>
+          <p className="mt-1 text-[11px] text-subtle">امسح للوصول لملفك أو ابحث بالرقم</p>
+        </div>
+      </div>
+    </section>
   );
 }
 
