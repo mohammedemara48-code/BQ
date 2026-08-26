@@ -32,10 +32,35 @@ import {
 } from "@/lib/bq/hooks";
 import { cn, formatDuration } from "@/lib/utils";
 
-/** Survives CallLayer remounts so a just-ended call never rings again. */
-const endedCallIds = new Set<number>();
-
+const ENDED_KEY = "bq-ended-calls";
 const CALL_HISTORY_KEY = "bq-call";
+
+function loadEnded(): Set<number> {
+  try {
+    const raw = sessionStorage.getItem(ENDED_KEY);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw) as number[];
+    return new Set(Array.isArray(arr) ? arr : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function markEnded(id: number) {
+  const s = loadEnded();
+  s.add(id);
+  // keep last 40 ids
+  const arr = [...s].slice(-40);
+  try {
+    sessionStorage.setItem(ENDED_KEY, JSON.stringify(arr));
+  } catch {
+    /* ignore */
+  }
+}
+
+function wasEnded(id: number) {
+  return loadEnded().has(id);
+}
 
 export function CallLayer() {
   const { user } = useCurrentUserState();
@@ -61,11 +86,11 @@ export function CallLayer() {
   const offered = useRef(false);
   const closing = useRef(false);
   const historyPushed = useRef(false);
-  const ignoreNextPop = useRef(false);
   const sendRef = useRef(sendSignal.mutateAsync);
   sendRef.current = sendSignal.mutateAsync;
   const hangRef = useRef(hangLive.mutateAsync);
   hangRef.current = hangLive.mutateAsync;
+
   const mediaOn = Boolean(
     call.active && call.callId && (call.role === "out" || call.phase === "live"),
   );
@@ -73,8 +98,7 @@ export function CallLayer() {
   const name = person?.name || call.peerName || "شخص";
   const photo = person?.photoUrl || call.peerPhoto;
 
-  // Push a history entry while a call is active so Android back ends the call
-  // instead of navigating under the overlay / re-showing it later.
+  // ── History: one entry while call is active. System back = hang only. ──
   useEffect(() => {
     if (!call.active || !call.callId) return;
     if (historyPushed.current) return;
@@ -88,24 +112,19 @@ export function CallLayer() {
 
   useEffect(() => {
     function onPopState() {
-      if (ignoreNextPop.current) {
-        ignoreNextPop.current = false;
-        historyPushed.current = false;
-        return;
-      }
       const st = useCallStore.getState();
       if (!st.active) {
         historyPushed.current = false;
         return;
       }
-      // System back during call → end call and stay on the same page.
+      // Back during call → end call completely, stay on page.
       historyPushed.current = false;
-      if (st.callId) endedCallIds.add(st.callId);
-      void finishAsync(st.callId, st.role === "in" && st.phase === "ring" ? "decline" : "hang");
-      // Re-push so another back press does not leave the app mid-frame.
+      void finishAsync(
+        st.callId,
+        st.role === "in" && st.phase === "ring" ? "decline" : "hang",
+      );
       try {
-        window.history.pushState({ [CALL_HISTORY_KEY]: "done" }, "");
-        historyPushed.current = false;
+        window.history.pushState({ [CALL_HISTORY_KEY]: "closed" }, "");
       } catch {
         /* ignore */
       }
@@ -114,10 +133,14 @@ export function CallLayer() {
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
+  // ── Incoming: never re-open a call we already ended this session ──
   useEffect(() => {
     const row = incoming.data;
     if (!row || call.active) return;
-    if (endedCallIds.has(row.id)) return;
+    if (wasEnded(row.id)) {
+      void qc.setQueryData(["incoming-call"], null);
+      return;
+    }
     useCallStore.getState().incoming({
       callId: row.id,
       peerId: row.callerId,
@@ -125,8 +148,9 @@ export function CallLayer() {
       peerPhoto: row.callerPhoto,
       kind: row.kind,
     });
-  }, [incoming.data, call.active]);
+  }, [incoming.data, call.active, qc]);
 
+  // ── Remote status changes ──
   useEffect(() => {
     const row = session.data?.call;
     if (!row || !call.active) return;
@@ -136,17 +160,15 @@ export function CallLayer() {
     if (row.status === "declined" || row.status === "missed" || row.status === "ended") {
       if (closing.current) return;
       closing.current = true;
-      endedCallIds.add(row.id);
-      rtcRef.current?.close();
-      rtcRef.current = null;
-      localStreamRef.current = null;
+      markEnded(row.id);
+      teardownMedia();
       useCallStore.getState().hang();
       void qc.setQueryData(["incoming-call"], null);
+      void qc.removeQueries({ queryKey: ["call-session", row.id] });
       void qc.invalidateQueries({ queryKey: ["messages"] });
       void qc.invalidateQueries({ queryKey: ["chats"] });
       void qc.invalidateQueries({ queryKey: ["calls"] });
       void qc.invalidateQueries({ queryKey: ["incoming-call"] });
-      // Keep history entry; do NOT history.back() — that re-triggers call UI on Android.
       historyPushed.current = false;
       if (row.status === "declined") toast.error("تم رفض المكالمة");
       else if (row.status === "missed" && call.role === "out") toast.error("لا رد");
@@ -164,6 +186,16 @@ export function CallLayer() {
     return () => window.clearInterval(t);
   }, [call.active, call.phase]);
 
+  function teardownMedia() {
+    rtcRef.current?.close();
+    rtcRef.current = null;
+    localStreamRef.current = null;
+    setLinked(false);
+    setRtcReady(false);
+    setCamError("");
+  }
+
+  // ── Open WebRTC when mediaOn ──
   useEffect(() => {
     if (!mediaOn) return;
     if (rtcRef.current) return;
@@ -181,6 +213,7 @@ export function CallLayer() {
         if (!el) continue;
         el.srcObject = stream;
         el.muted = true;
+        el.setAttribute("playsinline", "true");
         void el.play().catch(() => undefined);
       }
     };
@@ -189,6 +222,7 @@ export function CallLayer() {
       if (remoteRef.current) {
         remoteRef.current.srcObject = stream;
         remoteRef.current.muted = true;
+        remoteRef.current.setAttribute("playsinline", "true");
         void remoteRef.current
           .play()
           .then(() => {
@@ -214,7 +248,6 @@ export function CallLayer() {
     };
 
     const pre = useCallStore.getState().preStream;
-    // Clear store reference so hang() doesn't double-stop after MediaCall owns tracks.
     if (pre) useCallStore.getState().setPreStream(null);
 
     void media
@@ -225,7 +258,24 @@ export function CallLayer() {
         media.setCamOff(useCallStore.getState().camOff);
         setRtcReady(true);
       })
-      .catch(() => setCamError(mediaErrorMessage("denied")));
+      .catch(async () => {
+        // Last-chance: try acquiring again inside the effect (may fail without gesture)
+        const retry = await requestCallMedia(call.kind === "video");
+        if (retry.ok && rtcRef.current === media) {
+          try {
+            await media.open(call.kind === "video", retry.stream);
+            media.setMuted(useCallStore.getState().muted);
+            media.setCamOff(useCallStore.getState().camOff);
+            setRtcReady(true);
+            return;
+          } catch {
+            /* fall through */
+          }
+        }
+        if (rtcRef.current === media) {
+          setCamError(mediaErrorMessage(retry.ok ? "unavailable" : retry.reason));
+        }
+      });
 
     return () => {
       media.close();
@@ -234,7 +284,7 @@ export function CallLayer() {
     };
   }, [mediaOn, call.kind]);
 
-  // Caller creates offer only after both sides are live
+  // Caller offer after both live
   useEffect(() => {
     if (!rtcReady || !mediaOn) return;
     if (call.role !== "out" || call.phase !== "live") return;
@@ -257,7 +307,6 @@ export function CallLayer() {
     if (remoteAudioRef.current) remoteAudioRef.current.muted = mute;
   }, [call.speaker]);
 
-  // Re-attach streams after minimize/expand
   useEffect(() => {
     const media = rtcRef.current;
     if (!media || !call.active) return;
@@ -285,7 +334,6 @@ export function CallLayer() {
     }
   }, [call.minimized, call.active, call.speaker, linked]);
 
-  // Process signals sequentially to keep SDP/ICE order
   useEffect(() => {
     const media = rtcRef.current;
     const signals = session.data?.signals;
@@ -321,29 +369,32 @@ export function CallLayer() {
     return () => window.clearTimeout(t);
   }, [call.active, call.role, call.phase, call.callId]);
 
-  async function finishAsync(id: number | null, reason: "hang" | "decline", timedOut = false) {
+  async function finishAsync(
+    id: number | null,
+    reason: "hang" | "decline",
+    timedOut = false,
+  ) {
     if (closing.current) return;
     closing.current = true;
-    if (id) endedCallIds.add(id);
-    rtcRef.current?.close();
-    rtcRef.current = null;
-    localStreamRef.current = null;
+    if (id) markEnded(id);
+    teardownMedia();
+    // Clear local UI immediately so back / re-render cannot show the call again
+    useCallStore.getState().hang();
+    void qc.setQueryData(["incoming-call"], null);
+    if (id) void qc.removeQueries({ queryKey: ["call-session", id] });
+    historyPushed.current = false;
+
     if (id) {
       try {
         await hangRef.current({ callId: id, reason });
       } catch {
-        /* still close UI */
+        /* still closed locally */
       }
     }
-    useCallStore.getState().hang();
-    void qc.setQueryData(["incoming-call"], null);
-    void qc.removeQueries({ queryKey: ["call-session", id] });
     void qc.invalidateQueries({ queryKey: ["messages"] });
     void qc.invalidateQueries({ queryKey: ["chats"] });
     void qc.invalidateQueries({ queryKey: ["calls"] });
     void qc.invalidateQueries({ queryKey: ["incoming-call"] });
-    // Keep history entry; do NOT history.back() — that re-triggers call UI on Android.
-    historyPushed.current = false;
     if (timedOut) toast.error("لا رد");
     closing.current = false;
   }
@@ -354,7 +405,6 @@ export function CallLayer() {
 
   async function accept() {
     if (!call.callId) return;
-    // Open camera under the same user gesture as the Answer tap (critical on mobile).
     const media = await requestCallMedia(call.kind === "video");
     if (!media.ok) {
       setCamError(mediaErrorMessage(media.reason));
@@ -381,61 +431,53 @@ export function CallLayer() {
       toast.error(mediaErrorMessage(media.reason));
       return;
     }
+    // Replace any existing RTC with a fresh one using this stream
+    teardownMedia();
     useCallStore.getState().setPreStream(media.stream);
-    // If RTC already tried and failed, close and let effect reopen with preStream
-    if (rtcRef.current) {
-      rtcRef.current.close();
-      rtcRef.current = null;
-      localStreamRef.current = null;
-      setRtcReady(false);
-    }
-    // Force media effect to re-run by toggling via answer path if live
-    if (call.phase === "live" || call.role === "out") {
-      // Effect depends on mediaOn; rtcRef null allows reopen
-      const pre = media.stream;
-      const m = new MediaCall();
-      rtcRef.current = m;
-      m.onLocalStream = (stream) => {
-        localStreamRef.current = stream;
-        for (const el of [localRef.current, pipLocalRef.current]) {
-          if (!el) continue;
-          el.srcObject = stream;
-          el.muted = true;
-          void el.play().catch(() => undefined);
-        }
-      };
-      m.onRemoteStream = (stream) => {
-        setLinked(true);
-        if (remoteRef.current) {
-          remoteRef.current.srcObject = stream;
-          remoteRef.current.muted = !useCallStore.getState().speaker;
-          void remoteRef.current.play().catch(() => undefined);
-        }
-        if (remoteAudioRef.current) {
-          remoteAudioRef.current.srcObject = stream;
-          remoteAudioRef.current.muted = !useCallStore.getState().speaker;
-          void remoteAudioRef.current.play().catch(() => undefined);
-        }
-      };
-      m.onSignal = (kind, payload) => {
-        const id = useCallStore.getState().callId;
-        if (!id) return;
-        void sendRef.current({ callId: id, kind, payload: JSON.stringify(payload) });
-      };
-      useCallStore.getState().setPreStream(null);
-      void m
-        .open(call.kind === "video", pre)
-        .then(() => {
-          if (rtcRef.current !== m) return;
-          m.setMuted(useCallStore.getState().muted);
-          m.setCamOff(useCallStore.getState().camOff);
-          setRtcReady(true);
-          if (call.role === "out" && call.phase === "live" && !offered.current) {
-            offered.current = true;
-            void m.offer();
-          }
-        })
-        .catch(() => setCamError(mediaErrorMessage("denied")));
+    const m = new MediaCall();
+    rtcRef.current = m;
+    offered.current = false;
+    seenSignals.current = 0;
+    m.onLocalStream = (stream) => {
+      localStreamRef.current = stream;
+      for (const el of [localRef.current, pipLocalRef.current]) {
+        if (!el) continue;
+        el.srcObject = stream;
+        el.muted = true;
+        void el.play().catch(() => undefined);
+      }
+    };
+    m.onRemoteStream = (stream) => {
+      setLinked(true);
+      if (remoteRef.current) {
+        remoteRef.current.srcObject = stream;
+        remoteRef.current.muted = !useCallStore.getState().speaker;
+        void remoteRef.current.play().catch(() => undefined);
+      }
+      if (remoteAudioRef.current) {
+        remoteAudioRef.current.srcObject = stream;
+        remoteAudioRef.current.muted = !useCallStore.getState().speaker;
+        void remoteAudioRef.current.play().catch(() => undefined);
+      }
+    };
+    m.onSignal = (kind, payload) => {
+      const id = useCallStore.getState().callId;
+      if (!id) return;
+      void sendRef.current({ callId: id, kind, payload: JSON.stringify(payload) });
+    };
+    const pre = media.stream;
+    useCallStore.getState().setPreStream(null);
+    try {
+      await m.open(call.kind === "video", pre);
+      m.setMuted(useCallStore.getState().muted);
+      m.setCamOff(useCallStore.getState().camOff);
+      setRtcReady(true);
+      if (call.role === "out" && call.phase === "live") {
+        offered.current = true;
+        void m.offer();
+      }
+    } catch {
+      setCamError(mediaErrorMessage("unavailable"));
     }
   }
 
@@ -455,7 +497,7 @@ export function CallLayer() {
       <button
         type="button"
         onClick={() => call.expand()}
-        className="fixed bottom-24 start-3 z-40 flex w-44 items-center gap-2 overflow-hidden rounded-xl border border-border bg-surface/95 p-2 text-start shadow-[var(--shadow-glow)]"
+        className="fixed bottom-24 start-3 z-50 flex w-44 items-center gap-2 overflow-hidden rounded-xl border border-border bg-surface/95 p-2 text-start shadow-[var(--shadow-glow)]"
         aria-label="تكبير المكالمة"
       >
         {call.kind === "video" && !call.camOff ? (

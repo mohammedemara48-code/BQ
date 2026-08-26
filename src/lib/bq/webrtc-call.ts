@@ -27,18 +27,28 @@ export class MediaCall {
     return this.local;
   }
 
-  /** Acquire camera/mic. Call this from a user-gesture handler on mobile. */
+  /** Acquire camera/mic. Prefer simple constraints (Android-friendly). */
   static async acquire(video: boolean): Promise<MediaStream> {
-    return navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true },
-      video: video
-        ? {
-            facingMode: "user",
-            width: { ideal: 640 },
-            height: { ideal: 480 },
-          }
-        : false,
-    });
+    const attempts: MediaStreamConstraints[] = video
+      ? [
+          { audio: true, video: true },
+          { audio: true, video: { facingMode: "user" } },
+          { audio: true, video: false },
+        ]
+      : [{ audio: true, video: false }];
+    let last: unknown;
+    for (const c of attempts) {
+      try {
+        const s = await navigator.mediaDevices.getUserMedia(c);
+        s.getTracks().forEach((t) => {
+          t.enabled = true;
+        });
+        return s;
+      } catch (e) {
+        last = e;
+      }
+    }
+    throw last instanceof Error ? last : new Error("getUserMedia failed");
   }
 
   async open(video: boolean, existing?: MediaStream | null) {

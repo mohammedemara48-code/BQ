@@ -1,8 +1,8 @@
-/** Helpers for camera/mic permission on mobile browsers (especially Android Chrome). */
+/** Camera/mic helpers — progressive fallbacks for picky Android browsers. */
 
 export type MediaPermResult =
   | { ok: true; stream: MediaStream }
-  | { ok: false; reason: "denied" | "unavailable" | "secure" };
+  | { ok: false; reason: "denied" | "unavailable" | "secure" | "busy" };
 
 function isSecureContext(): boolean {
   if (typeof window === "undefined") return false;
@@ -22,54 +22,68 @@ export async function queryMediaPermission(
 }
 
 /**
- * Request mic (+ camera if video). Must be called from a user gesture on mobile.
- * Returns a live MediaStream on success.
+ * Request mic (+ camera if video). Must run under a user gesture on mobile.
+ * Tries several constraint sets because many Android devices reject ideal width/facingMode.
  */
 export async function requestCallMedia(video: boolean): Promise<MediaPermResult> {
-  if (!isSecureContext()) {
-    return { ok: false, reason: "secure" };
+  if (!isSecureContext()) return { ok: false, reason: "secure" };
+  if (!navigator.mediaDevices?.getUserMedia) return { ok: false, reason: "unavailable" };
+
+  const attempts: MediaStreamConstraints[] = video
+    ? [
+        // 1) simple boolean — works on most Android Chrome builds
+        { audio: true, video: true },
+        // 2) facingMode only
+        { audio: true, video: { facingMode: "user" } },
+        // 3) facingMode environment (some devices invert)
+        { audio: true, video: { facingMode: "environment" } },
+        // 4) audio only as last resort so the call can still connect
+        { audio: true, video: false },
+      ]
+    : [
+        { audio: true, video: false },
+        { audio: { echoCancellation: true, noiseSuppression: true }, video: false },
+      ];
+
+  let lastName = "";
+  for (const constraints of attempts) {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      // Ensure tracks are live and enabled
+      stream.getTracks().forEach((t) => {
+        t.enabled = true;
+      });
+      return { ok: true, stream };
+    } catch (err) {
+      lastName = err instanceof DOMException ? err.name : String(err);
+      if (lastName === "NotAllowedError" || lastName === "PermissionDeniedError") {
+        return { ok: false, reason: "denied" };
+      }
+      if (lastName === "SecurityError") {
+        return { ok: false, reason: "denied" };
+      }
+      if (lastName === "NotReadableError" || lastName === "TrackStartError" || lastName === "AbortError") {
+        // Camera held by another app
+        return { ok: false, reason: "busy" };
+      }
+      // NotFoundError / OverconstrainedError → try next constraint set
+    }
   }
-  if (!navigator.mediaDevices?.getUserMedia) {
+
+  if (lastName === "NotFoundError" || lastName === "DevicesNotFoundError") {
     return { ok: false, reason: "unavailable" };
   }
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true },
-      video: video
-        ? {
-            facingMode: "user",
-            width: { ideal: 640 },
-            height: { ideal: 480 },
-          }
-        : false,
-    });
-    return { ok: true, stream };
-  } catch (err) {
-    const name = err instanceof DOMException ? err.name : "";
-    if (name === "NotAllowedError" || name === "PermissionDeniedError") {
-      return { ok: false, reason: "denied" };
-    }
-    if (name === "NotFoundError" || name === "DevicesNotFoundError") {
-      return { ok: false, reason: "unavailable" };
-    }
-    // Some Android builds throw SecurityError when blocked
-    if (name === "SecurityError") {
-      return { ok: false, reason: "denied" };
-    }
-    return { ok: false, reason: "unavailable" };
-  }
+  return { ok: false, reason: "unavailable" };
 }
 
-export function mediaErrorMessage(reason: "denied" | "unavailable" | "secure"): string {
-  if (reason === "secure") {
-    return "لازم التطبيق يشتغل على رابط آمن (https)";
-  }
-  if (reason === "unavailable") {
-    return "مفيش كاميرا أو ميكروفون على الجهاز";
-  }
-  return "الأذن مرفوضة — لازم تفعّل الكاميرا والميكروفون من إعدادات الموقع";
+export function mediaErrorMessage(
+  reason: "denied" | "unavailable" | "secure" | "busy",
+): string {
+  if (reason === "secure") return "لازم التطبيق يشتغل على رابط آمن (https)";
+  if (reason === "busy") return "الكاميرا مستخدمة من تطبيق تاني — اقفل الكاميرا هناك وحاول تاني";
+  if (reason === "unavailable") return "تعذر فتح الكاميرا/الميكروفون — جرّب من زر التفعيل تحت أو أعد تشغيل المتصفح";
+  return "الأذن مرفوضة — فعّل الكاميرا والميكروفون من إعدادات الموقع";
 }
 
-/** Short Arabic steps for Android Chrome site settings. */
 export const MEDIA_SETTINGS_HINT =
-  "من إعدادات الموقع فوق ← الأذونات ← فعّل الكاميرا والميكروفون. لو مش ظاهرين: اضغط «حذف البيانات وإعادة ضبط الأذونات» بعدين افتح التطبيق تاني واضغط السماح.";
+  "الأذونات مفعّلة؟ لو لسه مش شغال: اقفل أي تطبيق فاتح الكاميرا، أو امسح بيانات الموقع من الإعدادات وافتح التطبيق من جديد واضغط سماح.";
