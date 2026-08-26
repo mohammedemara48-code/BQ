@@ -30,6 +30,8 @@ import { cn, formatDuration } from "@/lib/utils";
 /** Survives CallLayer remounts so a just-ended call never rings again. */
 const endedCallIds = new Set<number>();
 
+const CALL_HISTORY_KEY = "bq-call";
+
 export function CallLayer() {
   const { user } = useCurrentUserState();
   const qc = useQueryClient();
@@ -53,7 +55,8 @@ export function CallLayer() {
   const seenSignals = useRef(0);
   const offered = useRef(false);
   const closing = useRef(false);
-  const signalChain = useRef(Promise.resolve());
+  const historyPushed = useRef(false);
+  const ignoreNextPop = useRef(false);
   const sendRef = useRef(sendSignal.mutateAsync);
   sendRef.current = sendSignal.mutateAsync;
   const hangRef = useRef(hangLive.mutateAsync);
@@ -64,6 +67,44 @@ export function CallLayer() {
 
   const name = person?.name || call.peerName || "شخص";
   const photo = person?.photoUrl || call.peerPhoto;
+
+  // Push a history entry while a call is active so Android back ends the call
+  // instead of navigating under the overlay / re-showing it later.
+  useEffect(() => {
+    if (!call.active || !call.callId) return;
+    if (historyPushed.current) return;
+    try {
+      window.history.pushState({ [CALL_HISTORY_KEY]: call.callId }, "");
+      historyPushed.current = true;
+    } catch {
+      /* ignore */
+    }
+  }, [call.active, call.callId]);
+
+  useEffect(() => {
+    function onPopState() {
+      if (ignoreNextPop.current) {
+        ignoreNextPop.current = false;
+        historyPushed.current = false;
+        return;
+      }
+      const st = useCallStore.getState();
+      if (!st.active) {
+        historyPushed.current = false;
+        return;
+      }
+      // Back pressed during an active call → hang and stay on the same page.
+      historyPushed.current = false;
+      void finishAsync(st.callId, st.role === "in" && st.phase === "ring" ? "decline" : "hang");
+      try {
+        window.history.pushState({ [CALL_HISTORY_KEY]: "done" }, "");
+      } catch {
+        /* ignore */
+      }
+    }
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
 
   useEffect(() => {
     const row = incoming.data;
@@ -97,6 +138,15 @@ export function CallLayer() {
       void qc.invalidateQueries({ queryKey: ["chats"] });
       void qc.invalidateQueries({ queryKey: ["calls"] });
       void qc.invalidateQueries({ queryKey: ["incoming-call"] });
+      if (historyPushed.current) {
+        historyPushed.current = false;
+        ignoreNextPop.current = true;
+        try {
+          window.history.back();
+        } catch {
+          ignoreNextPop.current = false;
+        }
+      }
       if (row.status === "declined") toast.error("تم رفض المكالمة");
       else if (row.status === "missed" && call.role === "out") toast.error("لا رد");
       closing.current = false;
@@ -120,9 +170,9 @@ export function CallLayer() {
     rtcRef.current = media;
     offered.current = false;
     seenSignals.current = 0;
-    signalChain.current = Promise.resolve();
     setLinked(false);
     setRtcReady(false);
+    setCamError("");
 
     const attachLocal = (stream: MediaStream) => {
       localStreamRef.current = stream;
@@ -162,8 +212,12 @@ export function CallLayer() {
       void sendRef.current({ callId: id, kind, payload: JSON.stringify(payload) });
     };
 
+    const pre = useCallStore.getState().preStream;
+    // Clear store reference so hang() doesn't double-stop after MediaCall owns tracks.
+    if (pre) useCallStore.getState().setPreStream(null);
+
     void media
-      .open(call.kind === "video")
+      .open(call.kind === "video", pre)
       .then(() => {
         if (rtcRef.current !== media) return;
         media.setMuted(useCallStore.getState().muted);
@@ -252,9 +306,7 @@ export function CallLayer() {
         continue;
       }
       seenSignals.current = id;
-      signalChain.current = signalChain.current
-        .then(() => media.handle(kind, payload))
-        .catch(() => undefined);
+      void media.handle(kind, payload);
     }
   }, [session.data?.signals, me.data?.userId, rtcReady]);
 
@@ -284,11 +336,20 @@ export function CallLayer() {
     }
     useCallStore.getState().hang();
     void qc.setQueryData(["incoming-call"], null);
+    void qc.removeQueries({ queryKey: ["call-session", id] });
     void qc.invalidateQueries({ queryKey: ["messages"] });
     void qc.invalidateQueries({ queryKey: ["chats"] });
     void qc.invalidateQueries({ queryKey: ["calls"] });
     void qc.invalidateQueries({ queryKey: ["incoming-call"] });
-    void qc.invalidateQueries({ queryKey: ["call-session"] });
+    if (historyPushed.current) {
+      historyPushed.current = false;
+      ignoreNextPop.current = true;
+      try {
+        window.history.back();
+      } catch {
+        ignoreNextPop.current = false;
+      }
+    }
     if (timedOut) toast.error("لا رد");
     closing.current = false;
   }
@@ -299,8 +360,20 @@ export function CallLayer() {
 
   async function accept() {
     if (!call.callId) return;
+    // Open camera under the same user gesture as the Answer tap (critical on mobile).
+    let stream: MediaStream | null = null;
+    try {
+      stream = await MediaCall.acquire(call.kind === "video");
+      useCallStore.getState().setPreStream(stream);
+    } catch {
+      setCamError("اسمح للميكروفون والكاميرا من الإعدادات");
+      toast.error("اسمح للميكروفون والكاميرا من الإعدادات");
+      return;
+    }
     const res = await pickUp.mutateAsync(call.callId);
     if (!res.ok) {
+      stream.getTracks().forEach((t) => t.stop());
+      useCallStore.getState().setPreStream(null);
       toast.error("تعذر الرد");
       finish("hang");
       return;
@@ -358,7 +431,7 @@ export function CallLayer() {
   }
 
   return (
-    <div className="fixed inset-0 z-40 mx-auto flex min-h-dvh w-full max-w-lg flex-col items-center justify-between overflow-hidden bg-bg px-6 py-10">
+    <div className="fixed inset-0 z-50 mx-auto flex min-h-dvh w-full max-w-lg flex-col items-center justify-between overflow-hidden bg-bg px-6 py-10">
       <audio ref={remoteAudioRef} autoPlay playsInline />
       {call.kind === "video" ? (
         <>

@@ -10,6 +10,7 @@ export class MediaCall {
   private remoteSet = false;
   private offering = false;
   private closed = false;
+  private queue: Promise<void> = Promise.resolve();
   onLocalStream: ((s: MediaStream) => void) | null = null;
   onRemoteStream: ((s: MediaStream) => void) | null = null;
   onSignal: ((kind: SignalKind, payload: unknown) => void) | null = null;
@@ -22,7 +23,25 @@ export class MediaCall {
     return this.remote;
   }
 
-  async open(video: boolean) {
+  get localStream() {
+    return this.local;
+  }
+
+  /** Acquire camera/mic. Call this from a user-gesture handler on mobile. */
+  static async acquire(video: boolean): Promise<MediaStream> {
+    return navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true },
+      video: video
+        ? {
+            facingMode: "user",
+            width: { ideal: 640 },
+            height: { ideal: 480 },
+          }
+        : false,
+    });
+  }
+
+  async open(video: boolean, existing?: MediaStream | null) {
     this.close();
     this.closed = false;
     this.pc = new RTCPeerConnection({ iceServers: defaultIceServers() });
@@ -42,16 +61,32 @@ export class MediaCall {
       }
       this.onRemoteStream?.(this.remote);
     };
-    this.local = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true },
-      video: video
-        ? { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }
-        : false,
-    });
+    this.pc.onconnectionstatechange = () => {
+      if (!this.pc || this.closed) return;
+      if (this.pc.connectionState === "failed") {
+        try {
+          void this.pc.restartIce();
+        } catch {
+          /* ignore */
+        }
+      }
+    };
+
+    if (existing && existing.getTracks().some((t) => t.readyState === "live")) {
+      this.local = existing;
+    } else {
+      this.local = await MediaCall.acquire(video);
+    }
     if (this.closed) {
       this.local.getTracks().forEach((t) => t.stop());
       this.local = null;
       return;
+    }
+    // Ensure video tracks stay enabled when we want video
+    if (video) {
+      this.local.getVideoTracks().forEach((t) => {
+        t.enabled = true;
+      });
     }
     this.local.getTracks().forEach((t) => this.pc!.addTrack(t, this.local!));
     this.onLocalStream?.(this.local);
@@ -75,6 +110,12 @@ export class MediaCall {
   }
 
   async handle(kind: string, payload: unknown) {
+    // Serialize SDP/ICE so glare and order stay correct
+    this.queue = this.queue.then(() => this.handleOne(kind, payload)).catch(() => undefined);
+    await this.queue;
+  }
+
+  private async handleOne(kind: string, payload: unknown) {
     if (!this.pc || this.closed) return;
     try {
       if (kind === "offer") {
