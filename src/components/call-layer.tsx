@@ -18,6 +18,11 @@ import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { callDurationSec, useCallStore } from "@/lib/bq/call-store";
 import { MediaCall } from "@/lib/bq/webrtc-call";
 import {
+  MEDIA_SETTINGS_HINT,
+  mediaErrorMessage,
+  requestCallMedia,
+} from "@/lib/bq/media-permission";
+import {
   findPerson,
   useBqMutations,
   useCallSession,
@@ -93,11 +98,14 @@ export function CallLayer() {
         historyPushed.current = false;
         return;
       }
-      // Back pressed during an active call → hang and stay on the same page.
+      // System back during call → end call and stay on the same page.
       historyPushed.current = false;
+      if (st.callId) endedCallIds.add(st.callId);
       void finishAsync(st.callId, st.role === "in" && st.phase === "ring" ? "decline" : "hang");
+      // Re-push so another back press does not leave the app mid-frame.
       try {
         window.history.pushState({ [CALL_HISTORY_KEY]: "done" }, "");
+        historyPushed.current = false;
       } catch {
         /* ignore */
       }
@@ -138,15 +146,8 @@ export function CallLayer() {
       void qc.invalidateQueries({ queryKey: ["chats"] });
       void qc.invalidateQueries({ queryKey: ["calls"] });
       void qc.invalidateQueries({ queryKey: ["incoming-call"] });
-      if (historyPushed.current) {
-        historyPushed.current = false;
-        ignoreNextPop.current = true;
-        try {
-          window.history.back();
-        } catch {
-          ignoreNextPop.current = false;
-        }
-      }
+      // Keep history entry; do NOT history.back() — that re-triggers call UI on Android.
+      historyPushed.current = false;
       if (row.status === "declined") toast.error("تم رفض المكالمة");
       else if (row.status === "missed" && call.role === "out") toast.error("لا رد");
       closing.current = false;
@@ -224,7 +225,7 @@ export function CallLayer() {
         media.setCamOff(useCallStore.getState().camOff);
         setRtcReady(true);
       })
-      .catch(() => setCamError("اسمح للميكروفون والكاميرا من الإعدادات"));
+      .catch(() => setCamError(mediaErrorMessage("denied")));
 
     return () => {
       media.close();
@@ -341,15 +342,8 @@ export function CallLayer() {
     void qc.invalidateQueries({ queryKey: ["chats"] });
     void qc.invalidateQueries({ queryKey: ["calls"] });
     void qc.invalidateQueries({ queryKey: ["incoming-call"] });
-    if (historyPushed.current) {
-      historyPushed.current = false;
-      ignoreNextPop.current = true;
-      try {
-        window.history.back();
-      } catch {
-        ignoreNextPop.current = false;
-      }
-    }
+    // Keep history entry; do NOT history.back() — that re-triggers call UI on Android.
+    historyPushed.current = false;
     if (timedOut) toast.error("لا رد");
     closing.current = false;
   }
@@ -361,24 +355,88 @@ export function CallLayer() {
   async function accept() {
     if (!call.callId) return;
     // Open camera under the same user gesture as the Answer tap (critical on mobile).
-    let stream: MediaStream | null = null;
-    try {
-      stream = await MediaCall.acquire(call.kind === "video");
-      useCallStore.getState().setPreStream(stream);
-    } catch {
-      setCamError("اسمح للميكروفون والكاميرا من الإعدادات");
-      toast.error("اسمح للميكروفون والكاميرا من الإعدادات");
+    const media = await requestCallMedia(call.kind === "video");
+    if (!media.ok) {
+      setCamError(mediaErrorMessage(media.reason));
+      toast.error(mediaErrorMessage(media.reason));
       return;
     }
+    useCallStore.getState().setPreStream(media.stream);
     const res = await pickUp.mutateAsync(call.callId);
     if (!res.ok) {
-      stream.getTracks().forEach((t) => t.stop());
+      media.stream.getTracks().forEach((t) => t.stop());
       useCallStore.getState().setPreStream(null);
       toast.error("تعذر الرد");
       finish("hang");
       return;
     }
     call.answer();
+  }
+
+  async function retryPermissions() {
+    setCamError("");
+    const media = await requestCallMedia(call.kind === "video");
+    if (!media.ok) {
+      setCamError(mediaErrorMessage(media.reason));
+      toast.error(mediaErrorMessage(media.reason));
+      return;
+    }
+    useCallStore.getState().setPreStream(media.stream);
+    // If RTC already tried and failed, close and let effect reopen with preStream
+    if (rtcRef.current) {
+      rtcRef.current.close();
+      rtcRef.current = null;
+      localStreamRef.current = null;
+      setRtcReady(false);
+    }
+    // Force media effect to re-run by toggling via answer path if live
+    if (call.phase === "live" || call.role === "out") {
+      // Effect depends on mediaOn; rtcRef null allows reopen
+      const pre = media.stream;
+      const m = new MediaCall();
+      rtcRef.current = m;
+      m.onLocalStream = (stream) => {
+        localStreamRef.current = stream;
+        for (const el of [localRef.current, pipLocalRef.current]) {
+          if (!el) continue;
+          el.srcObject = stream;
+          el.muted = true;
+          void el.play().catch(() => undefined);
+        }
+      };
+      m.onRemoteStream = (stream) => {
+        setLinked(true);
+        if (remoteRef.current) {
+          remoteRef.current.srcObject = stream;
+          remoteRef.current.muted = !useCallStore.getState().speaker;
+          void remoteRef.current.play().catch(() => undefined);
+        }
+        if (remoteAudioRef.current) {
+          remoteAudioRef.current.srcObject = stream;
+          remoteAudioRef.current.muted = !useCallStore.getState().speaker;
+          void remoteAudioRef.current.play().catch(() => undefined);
+        }
+      };
+      m.onSignal = (kind, payload) => {
+        const id = useCallStore.getState().callId;
+        if (!id) return;
+        void sendRef.current({ callId: id, kind, payload: JSON.stringify(payload) });
+      };
+      useCallStore.getState().setPreStream(null);
+      void m
+        .open(call.kind === "video", pre)
+        .then(() => {
+          if (rtcRef.current !== m) return;
+          m.setMuted(useCallStore.getState().muted);
+          m.setCamOff(useCallStore.getState().camOff);
+          setRtcReady(true);
+          if (call.role === "out" && call.phase === "live" && !offered.current) {
+            offered.current = true;
+            void m.offer();
+          }
+        })
+        .catch(() => setCamError(mediaErrorMessage("denied")));
+    }
   }
 
   if (!call.active) return null;
@@ -502,7 +560,19 @@ export function CallLayer() {
         <p className="mt-1 text-sm text-muted tabular-nums drop-shadow">
           {call.phase === "ring" ? ringLabel : formatDuration(seconds)}
         </p>
-        {camError ? <p className="mt-2 text-xs text-danger">{camError}</p> : null}
+        {camError ? (
+          <div className="mt-3 max-w-xs space-y-2 text-center">
+            <p className="text-xs text-danger">{camError}</p>
+            <p className="text-[11px] leading-relaxed text-muted">{MEDIA_SETTINGS_HINT}</p>
+            <button
+              type="button"
+              onClick={() => void retryPermissions()}
+              className="mx-auto rounded-full bg-primary px-4 py-2 text-xs font-medium text-primary-fg"
+            >
+              تفعيل الكاميرا والميكروفون
+            </button>
+          </div>
+        ) : null}
       </div>
 
       <div className="relative z-10 mb-6 flex items-center gap-3">
