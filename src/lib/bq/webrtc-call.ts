@@ -5,109 +5,55 @@ export type SignalKind = "offer" | "answer" | "ice";
 export class MediaCall {
   private pc: RTCPeerConnection | null = null;
   private local: MediaStream | null = null;
-  private remote: MediaStream | null = null;
+  private remote = new MediaStream();
   private pendingIce: RTCIceCandidateInit[] = [];
   private remoteSet = false;
-  private offering = false;
-  private closed = false;
   private queue: Promise<void> = Promise.resolve();
-  /** When true, close() must not stop local tracks (ownership transferred elsewhere). */
-  private keepLocalTracks = false;
   onLocalStream: ((s: MediaStream) => void) | null = null;
   onRemoteStream: ((s: MediaStream) => void) | null = null;
   onSignal: ((kind: SignalKind, payload: unknown) => void) | null = null;
 
   get ready() {
-    return this.pc !== null && !this.closed;
-  }
-
-  get remoteStream() {
-    return this.remote;
-  }
-
-  get localStream() {
-    return this.local;
-  }
-
-  get hasLocalVideo() {
-    return (this.local?.getVideoTracks().filter((t) => t.readyState === "live").length ?? 0) > 0;
-  }
-
-  get hasRemoteVideo() {
-    return (this.remote?.getVideoTracks().filter((t) => t.readyState === "live").length ?? 0) > 0;
-  }
-
-  static async acquire(video: boolean): Promise<MediaStream> {
-    const attempts: MediaStreamConstraints[] = video
-      ? [
-          { audio: true, video: true },
-          { audio: true, video: { facingMode: "user" } },
-          { audio: true, video: false },
-        ]
-      : [{ audio: true, video: false }];
-    let last: unknown;
-    for (const c of attempts) {
-      try {
-        const s = await navigator.mediaDevices.getUserMedia(c);
-        s.getTracks().forEach((t) => {
-          t.enabled = true;
-        });
-        return s;
-      } catch (e) {
-        last = e;
-      }
-    }
-    throw last instanceof Error ? last : new Error("getUserMedia failed");
+    return this.pc !== null;
   }
 
   async open(video: boolean, existing?: MediaStream | null) {
-    // Close previous PC but keep tracks if we are about to reuse `existing`
-    this.keepLocalTracks = Boolean(existing);
     this.close();
-    this.keepLocalTracks = false;
-    this.closed = false;
     this.pc = new RTCPeerConnection({ iceServers: defaultIceServers() });
+    this.remote = new MediaStream();
     this.pc.onicecandidate = (ev) => {
-      if (ev.candidate && !this.closed) {
-        this.onSignal?.("ice", ev.candidate.toJSON());
-      }
+      if (ev.candidate) this.onSignal?.("ice", ev.candidate.toJSON());
     };
     this.pc.ontrack = (ev) => {
-      if (this.closed) return;
-      if (!this.remote) this.remote = new MediaStream();
-      // Always add the fired track; also merge any stream tracks
-      if (!this.remote.getTracks().some((t) => t.id === ev.track.id)) {
-        this.remote.addTrack(ev.track);
-      }
-      if (ev.streams[0]) {
-        for (const track of ev.streams[0].getTracks()) {
-          if (!this.remote.getTracks().some((t) => t.id === track.id)) {
-            this.remote.addTrack(track);
-          }
-        }
+      const track = ev.track;
+      if (!this.remote.getTracks().some((t) => t.id === track.id)) {
+        this.remote.addTrack(track);
       }
       this.onRemoteStream?.(this.remote);
     };
     this.pc.onconnectionstatechange = () => {
-      if (!this.pc || this.closed) return;
-      if (this.pc.connectionState === "failed") {
+      if (this.pc?.connectionState === "failed") {
         try {
-          void this.pc.restartIce();
+          this.pc.restartIce();
         } catch {
           /* ignore */
         }
       }
     };
-
     if (existing && existing.getTracks().some((t) => t.readyState === "live")) {
       this.local = existing;
     } else {
-      this.local = await MediaCall.acquire(video);
-    }
-    if (this.closed) {
-      this.local.getTracks().forEach((t) => t.stop());
-      this.local = null;
-      return;
+      try {
+        this.local = await navigator.mediaDevices.getUserMedia({
+          audio: true,
+          video: Boolean(video),
+        });
+      } catch {
+        this.local = await navigator.mediaDevices.getUserMedia({
+          audio: true,
+          video: false,
+        });
+      }
     }
     this.local.getTracks().forEach((t) => {
       t.enabled = true;
@@ -117,42 +63,26 @@ export class MediaCall {
   }
 
   async offer() {
-    if (!this.pc || this.offering || this.closed) return;
-    if (this.pc.signalingState !== "stable") return;
-    this.offering = true;
-    try {
-      const offer = await this.pc.createOffer({
-        offerToReceiveAudio: true,
-        offerToReceiveVideo: true,
-      });
-      if (this.closed || !this.pc) return;
-      await this.pc.setLocalDescription(offer);
-      this.onSignal?.("offer", this.pc.localDescription);
-    } finally {
-      this.offering = false;
-    }
+    if (!this.pc) return;
+    const offer = await this.pc.createOffer();
+    await this.pc.setLocalDescription(offer);
+    this.onSignal?.("offer", this.pc.localDescription);
   }
 
-  async handle(kind: string, payload: unknown) {
+  handle(kind: string, payload: unknown) {
     this.queue = this.queue.then(() => this.handleOne(kind, payload)).catch(() => undefined);
-    await this.queue;
+    return this.queue;
   }
 
   private async handleOne(kind: string, payload: unknown) {
-    if (!this.pc || this.closed) return;
+    if (!this.pc) return;
     try {
       if (kind === "offer") {
         const desc = payload as RTCSessionDescriptionInit;
-        const state = this.pc.signalingState;
-        if (state !== "stable" && state !== "have-local-offer") return;
-        if (state === "have-local-offer") {
-          await this.pc.setLocalDescription({ type: "rollback" });
-        }
         await this.pc.setRemoteDescription(desc);
         this.remoteSet = true;
         await this.flushIce();
         const answer = await this.pc.createAnswer();
-        if (this.closed || !this.pc) return;
         await this.pc.setLocalDescription(answer);
         this.onSignal?.("answer", this.pc.localDescription);
       } else if (kind === "answer") {
@@ -162,13 +92,9 @@ export class MediaCall {
         await this.flushIce();
       } else if (kind === "ice") {
         const c = payload as RTCIceCandidateInit;
-        if (!c) return;
+        if (!c?.candidate && c?.candidate !== "") return;
         if (this.remoteSet) {
-          try {
-            await this.pc.addIceCandidate(c);
-          } catch {
-            /* stale */
-          }
+          await this.pc.addIceCandidate(c);
         } else {
           this.pendingIce.push(c);
         }
@@ -179,7 +105,7 @@ export class MediaCall {
   }
 
   private async flushIce() {
-    if (!this.pc || this.closed) return;
+    if (!this.pc) return;
     for (const c of this.pendingIce) {
       try {
         await this.pc.addIceCandidate(c);
@@ -202,29 +128,21 @@ export class MediaCall {
     });
   }
 
-  close() {
-    this.closed = true;
-    if (!this.keepLocalTracks) {
-      this.local?.getTracks().forEach((t) => t.stop());
-    }
-    // Never stop remote tracks we don't own exclusively — just detach
-    this.remote?.getTracks().forEach((t) => {
-      try {
-        t.stop();
-      } catch {
-        /* ignore */
-      }
-    });
+  restartIce() {
     try {
-      this.pc?.close();
+      this.pc?.restartIce();
     } catch {
       /* ignore */
     }
+  }
+
+  close() {
+    this.local?.getTracks().forEach((t) => t.stop());
+    this.pc?.close();
     this.pc = null;
     this.local = null;
-    this.remote = null;
     this.pendingIce = [];
     this.remoteSet = false;
-    this.offering = false;
+    this.remote = new MediaStream();
   }
 }

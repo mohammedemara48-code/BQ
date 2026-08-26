@@ -5,6 +5,39 @@ export type CallKind = "audio" | "video";
 export type CallPhase = "ring" | "live";
 export type CallRole = "out" | "in";
 
+const ENDED_KEY = "bq-ended-calls";
+
+export const endedCallIds = new Set<number>();
+
+function persistEnded() {
+  try {
+    sessionStorage.setItem(ENDED_KEY, JSON.stringify([...endedCallIds].slice(-50)));
+  } catch {
+    /* ignore */
+  }
+}
+
+export function hydrateEnded() {
+  try {
+    const raw = sessionStorage.getItem(ENDED_KEY);
+    if (!raw) return;
+    const arr = JSON.parse(raw) as number[];
+    if (Array.isArray(arr)) for (const id of arr) endedCallIds.add(id);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function markCallEnded(id: number | null | undefined) {
+  if (!id) return;
+  endedCallIds.add(id);
+  persistEnded();
+}
+
+export function wasCallEnded(id: number) {
+  return endedCallIds.has(id);
+}
+
 type CallState = {
   active: boolean;
   callId: number | null;
@@ -19,8 +52,9 @@ type CallState = {
   camOff: boolean;
   speaker: boolean;
   startedAt: number | null;
-  /** Stream acquired under a user gesture so mobile allows camera. */
   preStream: MediaStream | null;
+  /** Block incoming UI after hang so a stale ringing row cannot reopen. */
+  ignoreIncoming: boolean;
   start: (input: {
     peerId: string;
     peerName?: string;
@@ -28,7 +62,6 @@ type CallState = {
     kind: CallKind;
     role?: CallRole;
     callId?: number | null;
-    preStream?: MediaStream | null;
   }) => void;
   incoming: (input: {
     callId: number;
@@ -38,7 +71,6 @@ type CallState = {
     kind: CallKind;
   }) => void;
   setCallId: (id: number) => void;
-  setPreStream: (s: MediaStream | null) => void;
   answer: () => void;
   minimize: () => void;
   expand: () => void;
@@ -46,6 +78,8 @@ type CallState = {
   setMuted: (v: boolean) => void;
   setCamOff: (v: boolean) => void;
   setSpeaker: (v: boolean) => void;
+  setPreStream: (s: MediaStream | null) => void;
+  setIgnoreIncoming: (v: boolean) => void;
 };
 
 let stopRing: (() => void) | null = null;
@@ -60,15 +94,7 @@ function ringOff() {
   stopRing = null;
 }
 
-function stopPre(stream: MediaStream | null | undefined) {
-  stream?.getTracks().forEach((t) => {
-    try {
-      t.stop();
-    } catch {
-      /* ignore */
-    }
-  });
-}
+hydrateEnded();
 
 export const useCallStore = create<CallState>((set, get) => ({
   active: false,
@@ -85,9 +111,8 @@ export const useCallStore = create<CallState>((set, get) => ({
   speaker: true,
   startedAt: null,
   preStream: null,
+  ignoreIncoming: false,
   start: (input) => {
-    const prev = get().preStream;
-    if (prev && prev !== input.preStream) stopPre(prev);
     ringOn();
     set({
       active: true,
@@ -103,11 +128,13 @@ export const useCallStore = create<CallState>((set, get) => ({
       camOff: input.kind !== "video",
       speaker: true,
       startedAt: null,
-      preStream: input.preStream ?? null,
+      ignoreIncoming: false,
     });
   },
   incoming: (input) => {
     const cur = get();
+    if (cur.ignoreIncoming) return;
+    if (wasCallEnded(input.callId)) return;
     if (cur.active && cur.callId === input.callId) return;
     if (cur.active) return;
     ringOn();
@@ -130,15 +157,9 @@ export const useCallStore = create<CallState>((set, get) => ({
       camOff: input.kind !== "video",
       speaker: true,
       startedAt: null,
-      preStream: null,
     });
   },
   setCallId: (id) => set({ callId: id }),
-  setPreStream: (s) => {
-    const prev = get().preStream;
-    if (prev && prev !== s) stopPre(prev);
-    set({ preStream: s });
-  },
   answer: () => {
     ringOff();
     set({ phase: "live", startedAt: Date.now(), minimized: false });
@@ -147,7 +168,10 @@ export const useCallStore = create<CallState>((set, get) => ({
   expand: () => set({ minimized: false }),
   hang: () => {
     ringOff();
-    const prev = get().preStream;
+    const id = get().callId;
+    markCallEnded(id);
+    const stream = get().preStream;
+    stream?.getTracks().forEach((t) => t.stop());
     set({
       active: false,
       callId: null,
@@ -156,24 +180,14 @@ export const useCallStore = create<CallState>((set, get) => ({
       startedAt: null,
       peerId: "",
       preStream: null,
+      ignoreIncoming: true,
     });
-    // Stop only if still live and not yet adopted by RTC (tracks stopped by MediaCall.close otherwise)
-    if (prev) {
-      window.setTimeout(() => {
-        try {
-          // If MediaCall owns them they may already be stopped; stopping twice is safe.
-          prev.getTracks().forEach((t) => {
-            if (t.readyState === "live") t.stop();
-          });
-        } catch {
-          /* ignore */
-        }
-      }, 1500);
-    }
   },
   setMuted: (v) => set({ muted: v }),
   setCamOff: (v) => set({ camOff: v }),
   setSpeaker: (v) => set({ speaker: v }),
+  setPreStream: (s) => set({ preStream: s }),
+  setIgnoreIncoming: (v) => set({ ignoreIncoming: v }),
 }));
 
 export function startCall(input: {
@@ -183,7 +197,6 @@ export function startCall(input: {
   kind: CallKind;
   role?: CallRole;
   callId?: number | null;
-  preStream?: MediaStream | null;
 }) {
   useCallStore.getState().start(input);
 }

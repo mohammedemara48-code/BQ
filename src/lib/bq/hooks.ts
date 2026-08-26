@@ -466,8 +466,8 @@ export function useBqMutations() {
     mutationFn: (input: { callId: number; reason?: "hang" | "decline" }) =>
       endCall({ data: { callId: input.callId, reason: input.reason } }),
     onSuccess: () => {
+      void qc.setQueryData(["incoming-call"], null);
       void qc.invalidateQueries({ queryKey: ["calls"] });
-      void qc.invalidateQueries({ queryKey: ["incoming-call"] });
       void qc.invalidateQueries({ queryKey: ["messages"] });
       void qc.invalidateQueries({ queryKey: ["chats"] });
     },

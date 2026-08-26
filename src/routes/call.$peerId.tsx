@@ -1,10 +1,12 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { RedirectToSignIn } from "@/lib/auth/gates";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
-import { findPerson, useMe, usePeople } from "@/lib/bq/hooks";
-import { beginOutgoingCall } from "@/lib/bq/start-call";
 
+/**
+ * Legacy URL. Must NEVER start a call — Android back / notification
+ * history used to remount this page and place a brand-new ringing call.
+ */
 export const Route = createFileRoute("/call/$peerId")({
   validateSearch: (s: Record<string, unknown>): { kind: "audio" | "video" } => ({
     kind: s.kind === "video" ? "video" : "audio",
@@ -15,25 +17,12 @@ export const Route = createFileRoute("/call/$peerId")({
 function CallPage() {
   const { user, isPending } = useCurrentUserState();
   const { peerId } = Route.useParams();
-  const { kind } = Route.useSearch();
   const navigate = useNavigate();
-  const people = usePeople();
-  const me = useMe();
-  const person = findPerson(people.data, me.data, peerId);
-  const started = useRef(false);
 
   useEffect(() => {
-    if (!user || started.current) return;
-    started.current = true;
-    void beginOutgoingCall({
-      peerId,
-      kind,
-      peerName: person?.name,
-      peerPhoto: person?.photoUrl,
-    }).then(() => {
-      void navigate({ to: "/chat/$peerId", params: { peerId } });
-    });
-  }, [user, peerId, kind, person?.name, person?.photoUrl, navigate]);
+    if (!user) return;
+    void navigate({ to: "/chat/$peerId", params: { peerId }, replace: true });
+  }, [user, peerId, navigate]);
 
   if (isPending) return <div className="min-h-dvh bg-bg" />;
   if (!user) return <RedirectToSignIn />;

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { getSql } from "@/lib/db";
 import { authMiddleware } from "@/lib/auth/middleware";
 import { pairIds } from "@/lib/utils";
-import { blockedSet, ensureMe, notify } from "./server";
+import { allowThread, blockedSet, ensureMe, notify } from "./server";
 
 export type LiveCallRow = {
   id: number;
@@ -25,13 +25,70 @@ export type CallSignalRow = {
   payload: string;
 };
 
+function fmtDur(sec: number) {
+  const m = Math.floor(sec / 60);
+  const s = Math.max(0, Math.floor(sec % 60));
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+async function insertCallMessage(
+  callerId: string,
+  calleeId: string,
+  kind: string,
+  result: "ended" | "missed" | "declined",
+  duration: number,
+) {
+  const sql = await getSql();
+  const [a, b] = pairIds(callerId, calleeId);
+  const video = kind === "video";
+  const text =
+    result === "declined"
+      ? video
+        ? "مكالمة فيديو مرفوضة"
+        : "مكالمة مرفوضة"
+      : result === "missed"
+        ? video
+          ? "مكالمة فيديو فائتة"
+          : "مكالمة فائتة"
+        : video
+          ? `مكالمة فيديو · ${fmtDur(duration)}`
+          : `مكالمة · ${fmtDur(duration)}`;
+  await sql`
+    insert into messages (user_a, user_b, sender_id, type, text, delivered)
+    values (${a}, ${b}, ${callerId}, ${"call"}, ${text}, ${true})
+  `;
+  await allowThread(callerId, calleeId);
+  await allowThread(calleeId, callerId);
+}
+
 async function expireStale() {
   const sql = await getSql();
-  await sql`
+  const missed = await sql<{
+    id: number;
+    caller_id: string;
+    callee_id: string;
+    kind: string;
+  }>`
     update live_calls
     set status = 'missed', ended_at = now()
     where status = 'ringing'
-      and created_at < now() - interval '45 seconds'
+      and created_at < now() - interval '70 seconds'
+    returning id, caller_id, callee_id, kind
+  `;
+  for (const row of missed) {
+    await sql`
+      insert into calls (user_id, peer_id, kind, direction, duration_sec)
+      values
+        (${row.caller_id}, ${row.callee_id}, ${row.kind}, ${"out"}, ${0}),
+        (${row.callee_id}, ${row.caller_id}, ${row.kind}, ${"in"}, ${0})
+    `;
+    await insertCallMessage(row.caller_id, row.callee_id, row.kind, "missed", 0);
+  }
+  await sql`
+    update live_calls
+    set status = 'ended', ended_at = coalesce(ended_at, now())
+    where status = 'live'
+      and coalesce(answered_at, created_at) < now() - interval '2 hours'
   `;
 }
 
@@ -230,17 +287,12 @@ export const endCall = createServerFn({ method: "POST" })
       return { ok: true as const };
     }
     const reason =
-      data.reason === "decline"
-        ? "declined"
-        : row.status === "ringing"
-          ? "missed"
-          : "ended";
+      data.reason === "decline" ? "declined" : row.status === "ringing" ? "missed" : "ended";
     await sql`
       update live_calls
       set status = ${reason}, ended_at = now(), ended_by = ${context.userId}
       where id = ${data.callId}
     `;
-    // Kill any other ringing/live rows for this user so UI cannot reopen another call
     await sql`
       update live_calls
       set status = 'ended', ended_at = now(), ended_by = ${context.userId}
@@ -258,20 +310,7 @@ export const endCall = createServerFn({ method: "POST" })
         (${row.caller_id}, ${row.callee_id}, ${row.kind}, ${"out"}, ${duration}),
         (${row.callee_id}, ${row.caller_id}, ${row.kind}, ${"in"}, ${duration})
     `;
-    const [a, b] = pairIds(row.caller_id, row.callee_id);
-    const kindLabel = row.kind === "video" ? "فيديو" : "صوت";
-    let text = `مكالمة ${kindLabel}`;
-    if (reason === "missed") text = `مكالمة ${kindLabel} فائتة`;
-    else if (reason === "declined") text = `تم رفض مكالمة ${kindLabel}`;
-    else if (duration > 0) {
-      const m = Math.floor(duration / 60);
-      const s = duration % 60;
-      text = `مكالمة ${kindLabel} · ${m}:${s.toString().padStart(2, "0")}`;
-    }
-    await sql`
-      insert into messages (user_a, user_b, sender_id, type, text, delivered)
-      values (${a}, ${b}, ${context.userId}, ${"call"}, ${text}, ${true})
-    `;
+    await insertCallMessage(row.caller_id, row.callee_id, row.kind, reason, duration);
     return { ok: true as const };
   });
 
