@@ -3,11 +3,9 @@
 ## Required after this hardening PR
 
 ### VAPID rotation (web push)
-- Set on the Vercel project **bq** for production, preview, and development:
-  - `VITE_VAPID_PUBLIC_KEY` (public; safe to expose to the client bundle)
-  - `VAPID_PRIVATE_KEY` (secret; server-only)
-- An old private key may exist in git history — always rotate rather than reuse.
-- After rotating, redeploy production so the client picks up the new public key.
+- Rotated on the Vercel project **bq** (production, preview, development) as part of the hardening work.
+- Keys: `VITE_VAPID_PUBLIC_KEY` (client) and `VAPID_PRIVATE_KEY` (server, encrypted).
+- If these were ever leaked again, generate a new pair with `npx web-push generate-vapid-keys` and upsert on Vercel, then redeploy.
 
 ### Optional / recommended
 - `GROK_AUTH_ISSUER`, `GROK_AUTH_CLIENT_ID`, `GROK_AUTH_CLIENT_SECRET` — without these the app falls back to preview OAuth credentials in the repo. Set real broker credentials for production.

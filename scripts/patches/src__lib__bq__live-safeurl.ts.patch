@@ -1,0 +1,27 @@
+--- a/src/lib/bq/live.ts
++++ b/src/lib/bq/live.ts
+@@ -1,5 +1,6 @@
+ import { createServerFn } from "@tanstack/react-start";
+ import { z } from "zod";
++import { optionalSafeMediaUrl } from "@/lib/safe-url";
+ import { getSql } from "@/lib/db";
+ import { authMiddleware } from "@/lib/auth/middleware";
+ import { pairIds } from "@/lib/utils";
+@@ -67,7 +68,7 @@
+       .object({
+         type: z.enum(["image", "video", "text"]),
+         text: z.string().max(180).optional(),
+-        fileUrl: z.string().max(2_000_000).nullable().optional(),
++        fileUrl: optionalSafeMediaUrl,
+       })
+       .parse(d),
+   )
+@@ -310,7 +311,7 @@
+         roomId: z.number().int(),
+         text: z.string().max(2000),
+         type: z.enum(["text", "image", "video", "file", "voice"]).default("text"),
+-        fileUrl: z.string().max(2_000_000).nullable().optional(),
++        fileUrl: optionalSafeMediaUrl,
+         durationSec: z.number().int().min(0).max(1800).optional(),
+       })
+       .parse(d),
