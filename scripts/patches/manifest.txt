@@ -1,0 +1,8 @@
+scripts/patches/src__lib__bq__hooks.ts.patch
+scripts/patches/src__components__call-layer.tsx.patch
+scripts/patches/src__lib__bq__live.ts.patch
+scripts/patches/src__lib__bq__server.ts.patch
+scripts/patches/src__lib__bq__call-live.ts.patch
+scripts/patches/src__lib__bq__server-safeurl.ts.patch
+scripts/patches/src__lib__bq__live-safeurl.ts.patch
+scripts/patches/src__components__message-bubble.tsx.patch
