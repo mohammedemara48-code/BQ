@@ -1,7 +1,8 @@
-export const VAPID_PUBLIC_KEY =
-  (typeof import.meta !== "undefined" &&
-    (import.meta as ImportMeta & { env?: Record<string, string> }).env?.VITE_VAPID_PUBLIC_KEY) ||
-  "BKlA1SI4HiGzkdTHGhelH4VmAcD4vf5Y0BJtB52hdfqpUyKsR08GpWoRzqhhdNfXz0p-UXvZCtDd2L6Gno3LLYU";
+export function vapidPublicKey(): string {
+  if (typeof import.meta === "undefined") return "";
+  const env = (import.meta as ImportMeta & { env?: Record<string, string> }).env;
+  return (env?.VITE_VAPID_PUBLIC_KEY ?? "").trim();
+}
 
 function urlBase64ToUint8Array(base64String: string) {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
@@ -23,7 +24,9 @@ export async function enablePush(
     p256dh: string;
     auth: string;
   }) => Promise<unknown>,
-): Promise<"granted" | "denied" | "unsupported"> {
+): Promise<"granted" | "denied" | "unsupported" | "missing_vapid"> {
+  const key = vapidPublicKey();
+  if (!key) return "missing_vapid";
   if (typeof window === "undefined" || !("Notification" in window) || !("serviceWorker" in navigator)) {
     return "unsupported";
   }
@@ -35,7 +38,7 @@ export async function enablePush(
   if (!sub) {
     sub = await reg.pushManager.subscribe({
       userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+      applicationServerKey: urlBase64ToUint8Array(key),
     });
   }
   const json = sub.toJSON();
