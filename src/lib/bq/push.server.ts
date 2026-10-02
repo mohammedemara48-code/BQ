@@ -1,12 +1,17 @@
 import webpush from "web-push";
 import { getSql } from "@/lib/db";
 
-const VAPID_PUBLIC =
-  process.env.VITE_VAPID_PUBLIC_KEY ||
-  "BKlA1SI4HiGzkdTHGhelH4VmAcD4vf5Y0BJtB52hdfqpUyKsR08GpWoRzqhhdNfXz0p-UXvZCtDd2L6Gno3LLYU";
-const VAPID_PRIVATE = process.env.VAPID_PRIVATE_KEY || "cDLK_D8V9PSqzSPkMZV-CCokRJ0SzvND3859dhVqg6M";
+const VAPID_PUBLIC = process.env.VITE_VAPID_PUBLIC_KEY?.trim() || "";
+const VAPID_PRIVATE = process.env.VAPID_PRIVATE_KEY?.trim() || "";
 
-webpush.setVapidDetails("mailto:bq@wasl.app", VAPID_PUBLIC, VAPID_PRIVATE);
+const vapidReady = Boolean(VAPID_PUBLIC && VAPID_PRIVATE);
+if (vapidReady) {
+  webpush.setVapidDetails("mailto:bq@wasl.app", VAPID_PUBLIC, VAPID_PRIVATE);
+} else {
+  console.warn(
+    "[push] VAPID keys missing — web push disabled until VITE_VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY are set",
+  );
+}
 
 export type PushPayload = {
   title: string;
@@ -17,6 +22,7 @@ export type PushPayload = {
 };
 
 export async function sendPushToUser(userId: string, payload: PushPayload) {
+  if (!vapidReady) return;
   try {
     const sql = await getSql();
     const rows = await sql<{

@@ -1,4 +1,6 @@
 export const VAPID_PUBLIC_KEY =
+  (typeof import.meta !== "undefined" &&
+    (import.meta as ImportMeta & { env?: Record<string, string> }).env?.VITE_VAPID_PUBLIC_KEY) ||
   "BKlA1SI4HiGzkdTHGhelH4VmAcD4vf5Y0BJtB52hdfqpUyKsR08GpWoRzqhhdNfXz0p-UXvZCtDd2L6Gno3LLYU";
 
 function urlBase64ToUint8Array(base64String: string) {
