@@ -1,0 +1,67 @@
+--- a/scripts/grok-pwa-shared.mjs
++++ b/scripts/grok-pwa-shared.mjs
+@@ -6,7 +6,7 @@
+ import { existsSync, readFileSync } from "node:fs";
+ import { join } from "node:path";
+ 
+-export const DEFAULT_APP_NAME = "Grok App";
++export const DEFAULT_APP_NAME = "BQ";
+ export const OG_SERVICE_URL_DEFAULT = "https://og.grok.me";
+ export const OG_SITE_REL_PATH = "src/lib/og/site.json";
+ 
+@@ -227,19 +227,9 @@
+   ];
+ }
+ 
+-/** Platform "Created with Grok" banner — injected into every HTML document. */
+-export function grokExtensionsHeadTags(projectId = readGrokProjectId()) {
+-  const id = escapeHtml(projectId);
+-  const tags = [];
+-  if (projectId) {
+-    tags.push(`<meta name="grok-project-id" content="${id}">`);
+-  }
+-  tags.push(
+-    `<script src="${GROK_EXTENSIONS_SCRIPT_SRC}"${
+-      projectId ? ` data-project-id="${id}"` : ""
+-    } defer></script>`,
+-  );
+-  return tags;
++/** Disabled for standalone BQ — do not inject grok.com platform scripts. */
++export function grokExtensionsHeadTags(_projectId = readGrokProjectId()) {
++  return [];
+ }
+ 
+ export function readOgSite(cwd = process.cwd()) {
+@@ -447,26 +437,12 @@
+     grokOgHeadTags({ host, appName, site, documentTitle, cwd }).join(""),
+   );
+ 
+-  if (!next.includes("/grok-app-builder/extensions.js")) {
+-    missing.push(...grokExtensionsHeadTags(projectId));
+-  } else if (projectId && !next.includes('name="grok-project-id"')) {
+-    missing.push(`<meta name="grok-project-id" content="${escapeHtml(projectId)}">`);
+-  }
+-  if (
+-    projectId &&
+-    !next.includes('property="grok:app_id"') &&
+-    !next.includes("property='grok:app_id'")
+-  ) {
+-    missing.push(`<meta property="grok:app_id" content="${escapeHtml(projectId)}">`);
+-  }
+-  const creatorTags = grokXCreatorHeadTags(creator, creatorId);
+-  if (creatorTags.length > 0) {
+-    const hasCreator =
+-      next.includes('property="x:creator" content=') ||
+-      next.includes("property='x:creator' content=");
+-    if (!hasCreator) missing.push(creatorTags[0]);
+-    if (!next.includes('property="x:creator:id"')) missing.push(creatorTags[1]);
+-  }
++  // Standalone BQ: never inject grok.com extensions or grok:app_id meta.
++  void projectId;
++  void creator;
++  void creatorId;
++  void grokExtensionsHeadTags;
++  void grokXCreatorHeadTags;
+ 
+   if (missing.length === 0) return next;
+   return insertBeforeHeadClose(next, missing.join(""));
