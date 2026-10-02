@@ -1,5 +1,5 @@
 import { defaultIceServers, mergeIceServers } from "@/lib/multiplayer/p2p";
-import { getIceServers } from "@/lib/bq/ice.server";
+import { getIceServers } from "@/lib/bq/ice-servers";
 
 export type SignalKind = "offer" | "answer" | "ice";
 
