@@ -58,10 +58,15 @@ function RoomPage() {
             <button
               type="button"
               className="grid size-11 place-items-center rounded-lg hover:bg-elevated"
-              aria-label={speakerOn ? "إغلاق المكبر" : "مكبر الصوت"}
+              aria-label={speakerOn ? "إيقاف التشغيل التلقائي للصوت" : "تشغيل الصوت تلقائياً"}
+              title={speakerOn ? "التشغيل التلقائي للصوتيات: تشغيل" : "التشغيل التلقائي للصوتيات: إيقاف"}
               onClick={() => {
                 speaker.mutate({ roomId, on: !speakerOn });
-                toast.success(speakerOn ? "المكبر اتقفل" : "المكبر شغال");
+                toast.success(
+                  speakerOn
+                    ? "اتقفل التشغيل التلقائي للرسائل الصوتية"
+                    : "الرسائل الصوتية هتتسمع تلقائي",
+                );
               }}
             >
               {speakerOn ? <Volume2 className="size-5 text-accent" /> : <VolumeX className="size-5" />}
