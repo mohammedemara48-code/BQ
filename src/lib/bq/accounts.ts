@@ -4,7 +4,8 @@ import { authClient } from "@/lib/auth/client";
 
 const ACCOUNTS_KEY = "bq.accounts";
 const TOKENS_KEY = "bq.account-tokens";
-const BEARER_KEY = "grok-auth.bearer-token";
+const BEARER_KEY = "bq-auth.bearer-token";
+const LEGACY_BEARER_KEY = "grok-auth.bearer-token";
 
 export type SavedAccount = {
   id: string;
@@ -45,7 +46,6 @@ function readMeta(): AccountMeta[] {
 function writeMeta(list: AccountMeta[]) {
   if (typeof window === "undefined") return;
   try {
-    // Never persist session tokens in localStorage (XSS blast radius).
     window.localStorage.setItem(
       ACCOUNTS_KEY,
       JSON.stringify(list.slice(0, 8).map(({ id, name, email, photo }) => ({ id, name, email, photo }))),
@@ -123,7 +123,11 @@ function migrateLegacyTokens() {
 function readBearer(): string {
   if (typeof window === "undefined") return "";
   try {
-    return window.sessionStorage.getItem(BEARER_KEY) ?? "";
+    return (
+      window.sessionStorage.getItem(BEARER_KEY) ||
+      window.sessionStorage.getItem(LEGACY_BEARER_KEY) ||
+      ""
+    );
   } catch {
     return "";
   }
@@ -132,7 +136,9 @@ function readBearer(): string {
 function writeBearer(token: string) {
   if (typeof window === "undefined") return;
   try {
-    window.sessionStorage.setItem(BEARER_KEY, token);
+    if (token) window.sessionStorage.setItem(BEARER_KEY, token);
+    else window.sessionStorage.removeItem(BEARER_KEY);
+    window.sessionStorage.removeItem(LEGACY_BEARER_KEY);
   } catch {
     /* ignore */
   }

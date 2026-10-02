@@ -3,11 +3,9 @@ import { BqMark } from "@/components/bq-mark";
 import { InstallBanner } from "@/components/pwa-register";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
-import { GROK_PROVIDERS, authClient, authEnabled, signIn } from "@/lib/auth/client";
+import { authClient, authEnabled, setBearerToken } from "@/lib/auth/client";
 import { toast } from "sonner";
 import { listAccounts, rememberAccount, switchAccount } from "@/lib/bq/accounts";
-
-const PREVIEW_BEARER_KEY = "grok-auth.bearer-token";
 
 function persistAuthToken(payload: unknown): boolean {
   if (!payload || typeof payload !== "object") return false;
@@ -17,12 +15,8 @@ function persistAuthToken(payload: unknown): boolean {
     (typeof data.session?.token === "string" && data.session.token) ||
     "";
   if (token.length < 8) return false;
-  try {
-    window.sessionStorage.setItem(PREVIEW_BEARER_KEY, token);
-    return true;
-  } catch {
-    return false;
-  }
+  setBearerToken(token);
+  return true;
 }
 
 async function stashSession() {
@@ -91,20 +85,6 @@ export function LoginForm() {
     }
   }
 
-  async function onOauth(providerId: string) {
-    setError("");
-    setBusy(true);
-    try {
-      await signIn(providerId, { callbackURL: "/?tab=me" });
-    } catch (err) {
-      setBusy(false);
-      setError(
-        err instanceof Error
-          ? arabicAuthError(err.message)
-          : "تعذر فتح نافذة الدخول",
-      );
-    }
-  }
 
   return (
     <main className="flex min-h-dvh items-center justify-center px-5 py-10">
@@ -205,25 +185,6 @@ export function LoginForm() {
                 {mode === "up" ? "لدي حساب" : "حساب جديد"}
               </button>
 
-              <div className="my-5 flex items-center gap-3">
-                <span className="h-px flex-1 bg-border" />
-                <span className="text-xs text-subtle">أو</span>
-                <span className="h-px flex-1 bg-border" />
-              </div>
-
-              <div className="space-y-2">
-                {GROK_PROVIDERS.map((p) => (
-                  <Button
-                    key={p.providerId}
-                    variant="secondary"
-                    className="w-full"
-                    disabled={busy}
-                    onClick={() => void onOauth(p.providerId)}
-                  >
-                    {p.label === "Google" ? "Google" : "X"}
-                  </Button>
-                ))}
-              </div>
             </>
           )}
         </div>

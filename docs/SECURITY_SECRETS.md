@@ -1,16 +1,22 @@
-# Secrets that still need operator action
+# Secrets & operations notes (BQ standalone)
 
-## Required after this hardening PR
+## Auth (no Grok sandbox)
 
-### VAPID rotation (web push)
-- Rotated on the Vercel project **bq** (production, preview, development) as part of the hardening work.
-- Keys: `VITE_VAPID_PUBLIC_KEY` (client) and `VAPID_PRIVATE_KEY` (server, encrypted).
-- If these were ever leaked again, generate a new pair with `npx web-push generate-vapid-keys` and upsert on Vercel, then redeploy.
+BQ uses **Better Auth email/password** only. There is no Grok OAuth broker and
+no baked preview client in the repo.
 
-### Optional / recommended
-- `GROK_AUTH_ISSUER`, `GROK_AUTH_CLIENT_ID`, `GROK_AUTH_CLIENT_SECRET` — without these the app falls back to preview OAuth credentials in the repo. Set real broker credentials for production.
-- `TURN_STATIC_SECRET` — without this, Open Relay’s public default secret is used. Fine for light traffic; set your own Metered/TURN secret for production scale.
-- `BLOB_READ_WRITE_TOKEN` — Vercel Blob for media; without it uploads fall back to limited data URLs.
-- `DATABASE_URL` / Neon — already required for the app to run.
+Already expected on Vercel project **bq**:
+- `BETTER_AUTH_SECRET`
+- `BETTER_AUTH_URL` (e.g. https://bq-waslapp.vercel.app)
+- `DATABASE_URL`
+- `VITE_AUTH_ENABLED` (should be `true` for production)
 
-Do not commit secret values. Prefer Vercel project env (encrypted/sensitive) or a secrets manager.
+## Web push
+- `VITE_VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` — rotated; rotate again if leaked.
+
+## Optional (cannot invent without a paid/account signup)
+- `TURN_STATIC_SECRET` — own TURN/Metered secret if free Open Relay quota is exceeded.
+- `BLOB_READ_WRITE_TOKEN` — already provisioned when Blob store is linked.
+- Google/X social login — not wired; needs product OAuth apps if desired later.
+
+Do not commit secret values.

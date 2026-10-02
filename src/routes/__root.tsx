@@ -6,7 +6,6 @@ import {
 } from "@tanstack/react-router";
 import { Toaster } from "sonner";
 import { AuthProvider } from "@/lib/auth/provider";
-import { PreviewHostBridge } from "@/components/preview-host-bridge";
 import { PwaRegister } from "@/components/pwa-register";
 import { QueryProvider } from "@/components/query-provider";
 import { CallLayer } from "@/components/call-layer";
@@ -33,9 +32,6 @@ export const Route = createRootRoute({
       { rel: "apple-touch-icon", href: "/icons/icon-180.png" },
       { rel: "stylesheet", href: appCss },
       { rel: "manifest", href: "/manifest.webmanifest" },
-      // Satisfy grok-pwa duplicate check so it does not inject a second
-      // "Grok App" manifest that Chrome would use instead of BQ's icons.
-      { rel: "prefetch", href: "/__grok/manifest.webmanifest" },
       { rel: "preconnect", href: "https://fonts.googleapis.com" },
       {
         rel: "preconnect",
@@ -58,7 +54,6 @@ function RootDocument() {
         <HeadContent />
       </head>
       <body className="bq-glow">
-        <PreviewHostBridge />
         <PwaRegister />
         <AuthProvider>
           <QueryProvider>
