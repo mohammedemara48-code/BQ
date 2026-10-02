@@ -156,18 +156,35 @@ function ChatPage() {
         })}
       </div>
 
-      <ChatComposer
-        busy={send.isPending}
-        onSend={async (d) => {
-          await send.mutateAsync({
-            peerId,
-            text: d.text,
-            type: d.type as MsgType,
-            fileUrl: d.fileUrl,
-            durationSec: d.durationSec,
-          });
-        }}
-      />
+      {isRequest ? (
+        <div className="border-t border-border bg-surface px-4 py-3 text-center text-sm text-muted">
+          اقبل طلب المراسلة أولاً عشان ترد
+        </div>
+      ) : (
+        <ChatComposer
+          busy={send.isPending}
+          onSend={async (d) => {
+            const res = await send.mutateAsync({
+              peerId,
+              text: d.text,
+              type: d.type as MsgType,
+              fileUrl: d.fileUrl,
+              durationSec: d.durationSec,
+              viewOnce: d.viewOnce,
+            });
+            if (res && typeof res === "object" && "ok" in res && res.ok === false) {
+              const reason = "reason" in res ? String((res as { reason?: string }).reason ?? "") : "";
+              toast.error(
+                reason === "accept_required"
+                  ? "اقبل طلب المراسلة أولاً"
+                  : reason === "blocked"
+                    ? "لا يمكن المراسلة"
+                    : "تعذر الإرسال",
+              );
+            }
+          }}
+        />
+      )}
     </div>
   );
 }
