@@ -1,4 +1,4 @@
-import { Plus, X } from "lucide-react";
+import { Plus, Trash2, X } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Avatar } from "@/components/avatar";
@@ -11,7 +11,7 @@ export function StoriesTray() {
   const stories = useStories();
   const people = usePeople();
   const me = useMe();
-  const { postStory } = useBqMutations();
+  const { postStory, dropStory } = useBqMutations();
   const fileRef = useRef<HTMLInputElement>(null);
   const [viewer, setViewer] = useState<Story[] | null>(null);
   const [idx, setIdx] = useState(0);
@@ -147,8 +147,30 @@ export function StoriesTray() {
               <p className="font-display text-2xl">{current.text}</p>
             )}
           </button>
-          <div className="px-4 pb-8">
-            <Button className="w-full" variant="secondary" onClick={() => setViewer(null)}>
+          <div className="flex gap-2 px-4 pb-8">
+            {current.userId === me.data?.userId ? (
+              <Button
+                className="flex-1"
+                variant="secondary"
+                disabled={dropStory.isPending}
+                onClick={() => {
+                  const id = current.id;
+                  void dropStory.mutateAsync(id).then(() => {
+                    toast.success("تم حذف الحالة");
+                    const next = (viewer ?? []).filter((s) => s.id !== id);
+                    if (next.length === 0) setViewer(null);
+                    else {
+                      setViewer(next);
+                      setIdx((i) => Math.min(i, next.length - 1));
+                    }
+                  });
+                }}
+              >
+                <Trash2 className="size-4" />
+                حذف
+              </Button>
+            ) : null}
+            <Button className="flex-1" variant="secondary" onClick={() => setViewer(null)}>
               إغلاق
             </Button>
           </div>
