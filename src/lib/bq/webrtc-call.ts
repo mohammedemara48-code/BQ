@@ -1,6 +1,16 @@
-import { defaultIceServers } from "@/lib/multiplayer/p2p";
+import { defaultIceServers, mergeIceServers } from "@/lib/multiplayer/p2p";
+import { getIceServers } from "@/lib/bq/ice.server";
 
 export type SignalKind = "offer" | "answer" | "ice";
+
+async function loadIceServers(): Promise<RTCIceServer[]> {
+  try {
+    const res = await getIceServers();
+    return mergeIceServers(res.iceServers as RTCIceServer[]);
+  } catch {
+    return defaultIceServers();
+  }
+}
 
 export class MediaCall {
   private pc: RTCPeerConnection | null = null;
@@ -12,13 +22,17 @@ export class MediaCall {
   onLocalStream: ((s: MediaStream) => void) | null = null;
   onRemoteStream: ((s: MediaStream) => void) | null = null;
   onSignal: ((kind: SignalKind, payload: unknown) => void) | null = null;
+  onConnectionState: ((state: RTCPeerConnectionState) => void) | null = null;
 
   get ready() {
     return this.pc !== null;
   }
 
+  get connectionState(): RTCPeerConnectionState | null {
+    return this.pc?.connectionState ?? null;
+  }
+
   async open(video: boolean, existing?: MediaStream | null) {
-    // Tear down the old PC without stopping tracks we may reuse.
     try {
       this.pc?.close();
     } catch {
@@ -28,7 +42,8 @@ export class MediaCall {
     this.pendingIce = [];
     this.remoteSet = false;
     this.remote = new MediaStream();
-    this.pc = new RTCPeerConnection({ iceServers: defaultIceServers() });
+    const iceServers = await loadIceServers();
+    this.pc = new RTCPeerConnection({ iceServers });
     this.remote = new MediaStream();
     this.pc.onicecandidate = (ev) => {
       if (ev.candidate) this.onSignal?.("ice", ev.candidate.toJSON());
@@ -41,9 +56,12 @@ export class MediaCall {
       this.onRemoteStream?.(this.remote);
     };
     this.pc.onconnectionstatechange = () => {
-      if (this.pc?.connectionState === "failed") {
+      const state = this.pc?.connectionState;
+      if (!state) return;
+      this.onConnectionState?.(state);
+      if (state === "failed") {
         try {
-          this.pc.restartIce();
+          this.pc?.restartIce();
         } catch {
           /* ignore */
         }

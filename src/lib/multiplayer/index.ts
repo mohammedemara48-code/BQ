@@ -1,9 +1,2 @@
-export { P2PRoom, defaultIceServers } from "./p2p";
-export type {
-  PeerInfo,
-  P2PRoomOptions,
-  SignalKind,
-  PeerRow,
-  SignalRow,
-  RtcPollResponse,
-} from "./p2p";
+export { defaultIceServers, mergeIceServers } from "./p2p";
+export type { SignalKind } from "./p2p";

@@ -1,0 +1,31 @@
+--- a/src/lib/bq/hooks.ts
++++ b/src/lib/bq/hooks.ts
+@@ -60,7 +60,7 @@
+ }
+ 
+ export function usePeople(enabled = true) {
+-  return useQuery({ queryKey: ["people"], queryFn: () => listPeople(), enabled });
++  return useQuery({ queryKey: ["people"], queryFn: () => listPeople(), enabled, refetchInterval: enabled ? 30_000 : false });
+ }
+ 
+ export function usePerson(id: string, enabled = true) {
+@@ -212,12 +212,16 @@
+   });
+ }
+ 
+-export function useCallSession(callId: number | null) {
++export function useCallSession(callId: number | null, sinceRef?: { current: number }) {
+   return useQuery({
+     queryKey: ["call-session", callId],
+-    queryFn: () => pollCall({ data: { callId: callId!, since: 0 } }),
++    queryFn: () =>
++      pollCall({
++        data: { callId: callId!, since: sinceRef?.current ?? 0 },
++      }),
+     enabled: Boolean(callId),
+-    refetchInterval: callId ? 500 : false,
++    refetchInterval: callId ? 800 : false,
++    staleTime: 0,
+   });
+ }
+ 

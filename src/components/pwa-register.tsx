@@ -60,7 +60,7 @@ export function PushBanner() {
     setBusy(true);
     const res = await enablePush((input) => savePushSubscription({ data: input })).catch(() => "denied" as const);
     setBusy(false);
-    setPerm(res === "granted" ? "hide" : res);
+    setPerm(res === "granted" || res === "missing_vapid" || res === "unsupported" ? "hide" : res === "denied" ? "denied" : "hide");
   }
 
   return (

@@ -3,6 +3,7 @@
 import { authClient } from "@/lib/auth/client";
 
 const ACCOUNTS_KEY = "bq.accounts";
+const TOKENS_KEY = "bq.account-tokens";
 const BEARER_KEY = "grok-auth.bearer-token";
 
 export type SavedAccount = {
@@ -10,32 +11,110 @@ export type SavedAccount = {
   name: string;
   email: string;
   photo: string;
+  /** Present only while this browser session still holds the token. */
   token: string;
 };
 
-function readRaw(): SavedAccount[] {
+type AccountMeta = Omit<SavedAccount, "token">;
+
+function readMeta(): AccountMeta[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = window.localStorage.getItem(ACCOUNTS_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (a): a is SavedAccount =>
-        a &&
-        typeof a === "object" &&
-        typeof (a as SavedAccount).id === "string" &&
-        typeof (a as SavedAccount).token === "string",
-    );
+    return parsed
+      .filter(
+        (a): a is AccountMeta & { token?: string } =>
+          Boolean(a) &&
+          typeof a === "object" &&
+          typeof (a as AccountMeta).id === "string",
+      )
+      .map((a) => ({
+        id: a.id,
+        name: typeof a.name === "string" ? a.name : "عضو",
+        email: typeof a.email === "string" ? a.email : "",
+        photo: typeof a.photo === "string" ? a.photo : "",
+      }));
   } catch {
     return [];
   }
 }
 
-function writeRaw(list: SavedAccount[]) {
+function writeMeta(list: AccountMeta[]) {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(list.slice(0, 8)));
+    // Never persist session tokens in localStorage (XSS blast radius).
+    window.localStorage.setItem(
+      ACCOUNTS_KEY,
+      JSON.stringify(list.slice(0, 8).map(({ id, name, email, photo }) => ({ id, name, email, photo }))),
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
+function readTokenMap(): Record<string, string> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.sessionStorage.getItem(TOKENS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") return {};
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof v === "string" && v.length > 8) out[k] = v;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function writeTokenMap(map: Record<string, string>) {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(TOKENS_KEY, JSON.stringify(map));
+  } catch {
+    /* ignore */
+  }
+}
+
+function migrateLegacyTokens() {
+  if (typeof window === "undefined") return;
+  try {
+    const raw = window.localStorage.getItem(ACCOUNTS_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return;
+    const map = readTokenMap();
+    let moved = false;
+    for (const a of parsed) {
+      if (
+        a &&
+        typeof a === "object" &&
+        typeof (a as SavedAccount).id === "string" &&
+        typeof (a as SavedAccount).token === "string" &&
+        (a as SavedAccount).token.length > 8
+      ) {
+        map[(a as SavedAccount).id] = (a as SavedAccount).token;
+        moved = true;
+      }
+    }
+    if (moved) {
+      writeTokenMap(map);
+      writeMeta(
+        parsed
+          .filter((a): a is SavedAccount => Boolean(a) && typeof a === "object" && typeof (a as SavedAccount).id === "string")
+          .map((a) => ({
+            id: a.id,
+            name: a.name || "عضو",
+            email: a.email || "",
+            photo: a.photo || "",
+          })),
+      );
+    }
   } catch {
     /* ignore */
   }
@@ -64,7 +143,9 @@ export function hasBearerToken(): boolean {
 }
 
 export function listAccounts(): SavedAccount[] {
-  return readRaw();
+  migrateLegacyTokens();
+  const tokens = readTokenMap();
+  return readMeta().map((a) => ({ ...a, token: tokens[a.id] || "" }));
 }
 
 export async function rememberAccount(partial: {
@@ -74,6 +155,7 @@ export async function rememberAccount(partial: {
   photo?: string | null;
 }): Promise<void> {
   if (typeof window === "undefined") return;
+  migrateLegacyTokens();
   let token = readBearer();
   if (!token) {
     try {
@@ -88,22 +170,27 @@ export async function rememberAccount(partial: {
       /* cookie session without exposed token */
     }
   }
-  const prev = readRaw().filter((a) => a.id !== partial.id);
-  const existing = readRaw().find((a) => a.id === partial.id);
-  writeRaw([
+  const prev = readMeta().filter((a) => a.id !== partial.id);
+  const existing = readMeta().find((a) => a.id === partial.id);
+  writeMeta([
     {
       id: partial.id,
       name: partial.name || existing?.name || "عضو",
       email: partial.email || existing?.email || "",
       photo: partial.photo || existing?.photo || "",
-      token: token || existing?.token || "",
     },
     ...prev,
   ]);
+  if (token) {
+    const map = readTokenMap();
+    map[partial.id] = token;
+    writeTokenMap(map);
+  }
 }
 
 export async function switchAccount(id: string): Promise<boolean> {
-  const hit = readRaw().find((a) => a.id === id);
+  migrateLegacyTokens();
+  const hit = listAccounts().find((a) => a.id === id);
   if (!hit?.token) return false;
   try {
     await authClient.signOut();
@@ -116,5 +203,8 @@ export async function switchAccount(id: string): Promise<boolean> {
 }
 
 export function forgetAccount(id: string): void {
-  writeRaw(readRaw().filter((a) => a.id !== id));
+  writeMeta(readMeta().filter((a) => a.id !== id));
+  const map = readTokenMap();
+  delete map[id];
+  writeTokenMap(map);
 }

@@ -1,4 +1,6 @@
 import {
+  Eye,
+  EyeOff,
   FileUp,
   ImagePlus,
   Mic,
@@ -32,11 +34,13 @@ export function ChatComposer({
     type: MsgType;
     fileUrl?: string | null;
     durationSec?: number;
+    viewOnce?: boolean;
   }) => Promise<void>;
   busy: boolean;
 }) {
   const [text, setText] = useState("");
   const [menu, setMenu] = useState(false);
+  const [viewOnce, setViewOnce] = useState(false);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [rec, setRec] = useState<"off" | "on">("off");
   const [elapsed, setElapsed] = useState(0);
@@ -137,11 +141,14 @@ export function ChatComposer({
     if (!draft || busy || uploading) return;
     const d = draft;
     setDraft(null);
+    const once = viewOnce && (d.type === "image" || d.type === "video");
+    setViewOnce(false);
     await onSend({
       text: d.name,
       type: d.type,
       fileUrl: d.url,
       durationSec: d.durationSec,
+      viewOnce: once,
     });
   }
 
@@ -182,11 +189,25 @@ export function ChatComposer({
                   ? "رسالة صوتية"
                   : "ملف"}
           </span>
+          {(draft.type === "image" || draft.type === "video") ? (
+            <button
+              type="button"
+              onClick={() => setViewOnce((v) => !v)}
+              aria-label={viewOnce ? "إلغاء عرض مرة" : "عرض مرة واحدة"}
+              className={cn(
+                "grid size-11 place-items-center rounded-full",
+                viewOnce ? "bg-primary text-primary-fg" : "bg-bg text-muted",
+              )}
+              title="عرض مرة واحدة"
+            >
+              {viewOnce ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+            </button>
+          ) : null}
           <button type="button" onClick={() => setDraft(null)} aria-label="حذف" className="grid size-11 place-items-center">
             <Trash2 className="size-4 text-danger" />
           </button>
           <Button size="sm" disabled={blocked} onClick={() => void sendDraft()}>
-            إرسال
+            {viewOnce && (draft.type === "image" || draft.type === "video") ? "مرة واحدة" : "إرسال"}
           </Button>
         </div>
       ) : null}

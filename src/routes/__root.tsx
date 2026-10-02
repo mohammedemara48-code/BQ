@@ -10,6 +10,7 @@ import { PreviewHostBridge } from "@/components/preview-host-bridge";
 import { PwaRegister } from "@/components/pwa-register";
 import { QueryProvider } from "@/components/query-provider";
 import { CallLayer } from "@/components/call-layer";
+import { PresenceHeartbeat } from "@/components/presence-heartbeat";
 import appCss from "../styles.css?url";
 
 const APP_NAME = "BQ";
@@ -62,6 +63,7 @@ function RootDocument() {
         <AuthProvider>
           <QueryProvider>
             <Outlet />
+            <PresenceHeartbeat />
             <CallLayer />
             <Toaster
               theme="dark"

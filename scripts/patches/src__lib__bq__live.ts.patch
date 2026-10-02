@@ -1,0 +1,53 @@
+--- a/src/lib/bq/live.ts
++++ b/src/lib/bq/live.ts
+@@ -28,6 +28,8 @@
+ export const listStories = createServerFn({ method: "GET" })
+   .middleware([authMiddleware])
+   .handler(async ({ context }) => {
++    const { blockedSet } = await import("./server");
++    const blocked = await blockedSet(context.userId);
+     const sql = await getSql();
+     const rows = await sql<{
+       id: number;
+@@ -44,16 +46,18 @@
+         and p.is_community = false
+       order by (s.user_id = ${context.userId}) desc, s.created_at desc
+     `;
+-    return rows.map(
+-      (r): Story => ({
+-        id: r.id,
+-        userId: r.user_id,
+-        type: r.type,
+-        text: r.text,
+-        fileUrl: r.file_url,
+-        createdAt: r.created_at,
+-      }),
+-    );
++    return rows
++      .filter((r) => r.user_id === context.userId || !blocked.has(r.user_id))
++      .map(
++        (r): Story => ({
++          id: r.id,
++          userId: r.user_id,
++          type: r.type,
++          text: r.text,
++          fileUrl: r.file_url,
++          createdAt: r.created_at,
++        }),
++      );
+   });
+ 
+ export const addStory = createServerFn({ method: "POST" })
+@@ -678,8 +682,11 @@
+   .middleware([authMiddleware])
+   .validator((d: { peerId: string }) => z.object({ peerId: z.string().min(1) }).parse(d))
+   .handler(async ({ context, data }) => {
+-    const { allowThread } = await import("./server");
++    const { allowThread, blockedSet } = await import("./server");
++    const blocked = await blockedSet(context.userId);
++    if (blocked.has(data.peerId)) return { ok: false as const, reason: "blocked" };
+     await allowThread(context.userId, data.peerId);
++    await allowThread(data.peerId, context.userId);
+     return { ok: true as const };
+   });
+ 

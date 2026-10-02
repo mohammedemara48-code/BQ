@@ -27,6 +27,7 @@ type HomeSearch = {
   install?: boolean;
   platform?: string;
   s?: string;
+  incoming?: boolean;
 };
 
 function isInstallFlag(value: unknown): boolean {
@@ -53,6 +54,7 @@ export const Route = createFileRoute("/")({
   validateSearch: (search: Record<string, unknown>): HomeSearch => {
     const next: HomeSearch = { tab: parseTab(search.tab) };
     if (isInstallFlag(search.install)) next.install = true;
+    if (isInstallFlag(search.incoming) || search.incoming === "1") next.incoming = true;
     if (typeof search.platform === "string" && search.platform.replaceAll('"', "").length > 0) {
       next.platform = search.platform.replaceAll('"', "");
     }
@@ -102,6 +104,15 @@ function Home() {
       void navigate({ to: "/person/$id", params: { id: hit.userId } });
     }
   }, [search.s, people.data, me.data, navigate]);
+
+  useEffect(() => {
+    if (!search.incoming || !user) return;
+    // Force call layer to accept ringing rows from push deep link /?incoming=1
+    void import("@/lib/bq/call-store").then(({ useCallStore }) => {
+      useCallStore.getState().setIgnoreIncoming(false);
+    });
+    void navigate({ to: "/", search: { tab: search.tab }, replace: true });
+  }, [search.incoming, user, navigate, search.tab]);
 
   if (installMode) {
     return <AndroidInstallPage />;
