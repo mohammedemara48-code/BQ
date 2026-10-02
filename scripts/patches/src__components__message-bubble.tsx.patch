@@ -1,0 +1,19 @@
+--- a/src/components/message-bubble.tsx
++++ b/src/components/message-bubble.tsx
+@@ -3,6 +3,7 @@
+ import { toast } from "sonner";
+ import { cn, formatDuration, formatTime } from "@/lib/utils";
+ import type { Message, Receipt, RoomMessage } from "@/lib/bq/types";
++import { isSafeMediaUrl } from "@/lib/safe-url";
+ 
+ export const REPORT_REASONS = ["مزعج", "محتوى غير لائق", "تحرش", "إساءة"] as const;
+ 
+@@ -70,7 +71,7 @@
+   }
+   if (type === "file") {
+     return (
+-      <a href={fileUrl ?? "#"} download={text} className="underline">
++      <a href={fileUrl && isSafeMediaUrl(fileUrl) ? fileUrl : "#"} download={text} className="underline" rel="noopener noreferrer">
+         {text || "ملف"}
+       </a>
+     );

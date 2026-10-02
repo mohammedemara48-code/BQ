@@ -1,0 +1,29 @@
+--- a/src/lib/bq/server.ts
++++ b/src/lib/bq/server.ts
+@@ -1,5 +1,6 @@
+ import { createServerFn } from "@tanstack/react-start";
+ import { z } from "zod";
++import { optionalSafeImageUrl, optionalSafeMediaUrl } from "@/lib/safe-url";
+ import { getSql } from "@/lib/db";
+ import { authMiddleware } from "@/lib/auth/middleware";
+ import { haversineKm, normalizeSerial, pairIds } from "@/lib/utils";
+@@ -377,8 +378,8 @@
+   city: z.string().max(60).optional(),
+   lookingFor: z.string().max(60).optional(),
+   interests: z.array(z.string().max(24)).max(12).optional(),
+-  photoUrl: z.string().max(350_000).optional(),
+-  coverUrl: z.string().max(350_000).optional(),
++  photoUrl: optionalSafeImageUrl,
++  coverUrl: optionalSafeImageUrl,
+   latitude: z.number().min(-90).max(90).nullable().optional(),
+   longitude: z.number().min(-180).max(180).nullable().optional(),
+   role: z.enum(["سالب", "موجب", "تبادل", ""]).optional(),
+@@ -538,7 +539,7 @@
+   peerId: z.string().min(1).max(120),
+   text: z.string().max(2000),
+   type: z.enum(["text", "image", "video", "file", "voice"]).default("text"),
+-  fileUrl: z.string().max(2_000_000).nullable().optional(),
++  fileUrl: optionalSafeMediaUrl,
+   viewOnce: z.boolean().optional(),
+   durationSec: z.number().int().min(0).max(1800).optional(),
+ });

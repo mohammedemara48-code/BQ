@@ -79,8 +79,8 @@ for (const line of readFileSync(manifest, "utf8").split(/\n+/)) {
   if (!rel) continue;
   const patchPath = join(root, rel);
   if (!existsSync(patchPath)) {
-    console.warn("missing patch", rel);
-    continue;
+    console.error("missing patch HARD-FAIL", rel);
+    process.exit(1);
   }
   if (trySystemPatch(patchPath)) {
     console.log("applied(system)", rel);
@@ -98,6 +98,7 @@ for (const line of readFileSync(manifest, "utf8").split(/\n+/)) {
     if (next !== original) writeFileSync(abs, next);
     console.log("applied(js)", relFile);
   } catch (e) {
-    console.warn("patch soft-fail", relFile, e.message);
+    console.error("patch HARD-FAIL", relFile, e.message);
+    process.exit(1);
   }
 }
