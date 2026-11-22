@@ -59,57 +59,15 @@ export async function handleAuthPopupRequest(request: Request): Promise<Response
     });
   }
 
-  // Stay first-party for the callback so the session cookie lands in THIS popup.
-  const back = `${url.origin}/auth/popup?done=1`;
-  try {
-    const apiRes = await auth.api.signInWithOAuth2({
-      body: {
-        providerId,
-        callbackURL: back,
-        errorCallbackURL: `${back}&error=1`,
-      },
-      // Forward the preview host so Better Auth derives the correct baseURL /
-      // redirect_uri for the dynamic `*.grok-sandbox.com` origin.
-      headers: request.headers,
-      asResponse: true,
-    });
-
-    if (!apiRes.ok) {
-      const detail = await apiRes.text().catch(() => "");
-      return completionResponse({
-        source: "grok-auth-popup",
-        token: null,
-        error: detail || `oauth_init_failed_${apiRes.status}`,
-      });
-    }
-
-    const body = (await apiRes.json().catch(() => null)) as {
-      url?: string;
-    } | null;
-    const location = body?.url;
-    if (!location) {
-      return completionResponse({
-        source: "grok-auth-popup",
-        token: null,
-        error: "oauth_init_missing_url",
-      });
-    }
-
-    // 302 to the broker (which headlessly forwards to Google/X). Forward any
-    // Set-Cookie (OAuth state / PKCE) so the callback can complete in this popup.
-    const headers = new Headers({ location, "cache-control": "no-store" });
-    for (const cookie of apiRes.headers.getSetCookie()) {
-      headers.append("set-cookie", cookie);
-    }
-    return new Response(null, { status: 302, headers });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "oauth_init_threw";
-    return completionResponse({
-      source: "grok-auth-popup",
-      token: null,
-      error: message,
-    });
-  }
+  // BQ is email/password only (AUTH_SOCIAL_PROVIDERS is empty and the
+  // genericOAuth plugin is not registered), so there is no OAuth flow to
+  // start. Keep the popup contract intact: report a clean error to the
+  // opener instead of calling a non-existent auth API.
+  return completionResponse({
+    source: "grok-auth-popup",
+    token: null,
+    error: `social_sign_in_not_configured:${providerId}`,
+  });
 }
 
 function completionResponse(message: PopupMessage): Response {

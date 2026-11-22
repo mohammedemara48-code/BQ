@@ -6,7 +6,7 @@ export async function uploadMedia(file: File, kind: "image" | "video" | "audio" 
   const token = getBearerToken();
   const headers: Record<string, string> = {};
   if (token) headers.Authorization = `Bearer ${token}`;
-  const safeName = file.name.replace(/[^\w.\-]+/g, "_").slice(0, 40) || "file";
+  const safeName = file.name.replace(/[^\w.-]+/g, "_").slice(0, 40) || "file";
   const pathname = `bq/${kind}/${Date.now()}-${safeName}`;
 
   try {
