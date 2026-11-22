@@ -111,25 +111,6 @@
  
  export const listRequests = createServerFn({ method: "GET" })
    .middleware([authMiddleware])
-@@ -693,6 +723,18 @@
-     return { ok: true as const };
-   });
- 
-+export const heartbeat = createServerFn({ method: "POST" })
-+  .middleware([authMiddleware])
-+  .handler(async ({ context }) => {
-+    const sql = await getSql();
-+    await sql`
-+      update profiles set online = true, updated_at = now()
-+      where user_id = ${context.userId}
-+    `;
-+    await refreshStalePresence();
-+    return { ok: true as const };
-+  });
-+
- export const listMembers = createServerFn({ method: "GET" })
-   .middleware([authMiddleware])
-   .handler(async ({ context }) => {
 @@ -794,6 +836,7 @@
        where (from_id = ${context.userId} and to_id = ${data.userId})
           or (from_id = ${data.userId} and to_id = ${context.userId})

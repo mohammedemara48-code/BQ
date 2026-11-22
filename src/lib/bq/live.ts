@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { optionalSafeMediaUrl } from "@/lib/safe-url";
 import { getSql } from "@/lib/db";
 import { authMiddleware } from "@/lib/auth/middleware";
 import { pairIds } from "@/lib/utils";
@@ -28,6 +29,8 @@ async function isAdmin(userId: string): Promise<boolean> {
 export const listStories = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
+    const { blockedSet } = await import("./server");
+    const blocked = await blockedSet(context.userId);
     const sql = await getSql();
     const rows = await sql<{
       id: number;
@@ -44,16 +47,18 @@ export const listStories = createServerFn({ method: "GET" })
         and p.is_community = false
       order by (s.user_id = ${context.userId}) desc, s.created_at desc
     `;
-    return rows.map(
-      (r): Story => ({
-        id: r.id,
-        userId: r.user_id,
-        type: r.type,
-        text: r.text,
-        fileUrl: r.file_url,
-        createdAt: r.created_at,
-      }),
-    );
+    return rows
+      .filter((r) => r.user_id === context.userId || !blocked.has(r.user_id))
+      .map(
+        (r): Story => ({
+          id: r.id,
+          userId: r.user_id,
+          type: r.type,
+          text: r.text,
+          fileUrl: r.file_url,
+          createdAt: r.created_at,
+        }),
+      );
   });
 
 export const addStory = createServerFn({ method: "POST" })
@@ -63,7 +68,7 @@ export const addStory = createServerFn({ method: "POST" })
       .object({
         type: z.enum(["image", "video", "text"]),
         text: z.string().max(180).optional(),
-        fileUrl: z.string().max(2_000_000).nullable().optional(),
+        fileUrl: optionalSafeMediaUrl,
       })
       .parse(d),
   )
@@ -306,7 +311,7 @@ export const sendRoomMessage = createServerFn({ method: "POST" })
         roomId: z.number().int(),
         text: z.string().max(2000),
         type: z.enum(["text", "image", "video", "file", "voice"]).default("text"),
-        fileUrl: z.string().max(2_000_000).nullable().optional(),
+        fileUrl: optionalSafeMediaUrl,
         durationSec: z.number().int().min(0).max(1800).optional(),
       })
       .parse(d),
@@ -678,8 +683,11 @@ export const acceptThread = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((d: { peerId: string }) => z.object({ peerId: z.string().min(1) }).parse(d))
   .handler(async ({ context, data }) => {
-    const { allowThread } = await import("./server");
+    const { allowThread, blockedSet } = await import("./server");
+    const blocked = await blockedSet(context.userId);
+    if (blocked.has(data.peerId)) return { ok: false as const, reason: "blocked" };
     await allowThread(context.userId, data.peerId);
+    await allowThread(data.peerId, context.userId);
     return { ok: true as const };
   });
 
