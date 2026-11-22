@@ -3,6 +3,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { cn, formatDuration, formatTime } from "@/lib/utils";
 import type { Message, Receipt, RoomMessage } from "@/lib/bq/types";
+import { isSafeMediaUrl } from "@/lib/safe-url";
 
 export const REPORT_REASONS = ["مزعج", "محتوى غير لائق", "تحرش", "إساءة"] as const;
 
@@ -70,7 +71,7 @@ export function MessageBody({
   }
   if (type === "file") {
     return (
-      <a href={fileUrl ?? "#"} download={text} className="underline">
+      <a href={fileUrl && isSafeMediaUrl(fileUrl) ? fileUrl : "#"} download={text} className="underline" rel="noopener noreferrer">
         {text || "ملف"}
       </a>
     );

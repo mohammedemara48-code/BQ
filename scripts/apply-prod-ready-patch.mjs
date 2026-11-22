@@ -19,7 +19,19 @@ function trySystemPatch(patchPath) {
     });
     return true;
   } catch {
-    return false;
+    // --forward exits nonzero when the patch is already applied; treat that
+    // (a clean reverse dry-run) as success so rebuilds are idempotent.
+    try {
+      execFileSync(
+        "patch",
+        ["-p1", "--forward", "--batch", "--dry-run", "-R", "-i", patchPath],
+        { cwd: root, stdio: "pipe" },
+      );
+      console.log("already applied", patchPath);
+      return true;
+    } catch {
+      return false;
+    }
   }
 }
 

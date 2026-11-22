@@ -29,7 +29,8 @@ export function CallLayer() {
   const qc = useQueryClient();
   const call = useCallStore();
   const incoming = useIncomingCall(Boolean(user) && !call.active);
-  const session = useCallSession(call.callId);
+  const sinceRef = useRef(0);
+  const session = useCallSession(call.callId, sinceRef);
   const people = usePeople(call.active);
   const me = useMe(call.active);
   const { pickUp, hangLive, sendSignal } = useBqMutations();
@@ -89,6 +90,17 @@ export function CallLayer() {
       if (!id) return;
       void sendRef.current({ callId: id, kind, payload: JSON.stringify(payload) });
     };
+    media.onConnectionState = (state) => {
+      if (state === "connected") {
+        setLinked(true);
+        setCamError("");
+      } else if (state === "failed") {
+        setCamError("تعذر الاتصال — جرّب شبكة أخرى أو أعد الاتصال");
+        toast.error("فشل ربط المكالمة (شبكة/NAT). أعد المحاولة.");
+      } else if (state === "disconnected") {
+        setCamError("الاتصال انقطع مؤقتاً…");
+      }
+    };
   }
 
   useEffect(() => {
@@ -98,6 +110,20 @@ export function CallLayer() {
     }, 5000);
     return () => window.clearTimeout(t);
   }, [call.ignoreIncoming]);
+
+  useEffect(() => {
+    function onMsg(ev: MessageEvent) {
+      const data = ev.data as { type?: string; url?: string } | null;
+      if (!data || data.type !== "bq-open") return;
+      const url = data.url || "";
+      if (url.includes("incoming=1") || url.includes("kind=call")) {
+        useCallStore.getState().setIgnoreIncoming(false);
+        void qc.invalidateQueries({ queryKey: ["incoming-call"] });
+      }
+    }
+    navigator.serviceWorker?.addEventListener("message", onMsg);
+    return () => navigator.serviceWorker?.removeEventListener("message", onMsg);
+  }, [qc]);
 
   useEffect(() => {
     const row = incoming.data;
@@ -169,6 +195,7 @@ export function CallLayer() {
     rtcRef.current = media;
     offered.current = false;
     seenSignals.current = 0;
+    sinceRef.current = 0;
     setLinked(false);
     setHasRemoteVideo(false);
     setRtcReady(false);
@@ -225,6 +252,7 @@ export function CallLayer() {
       if (s.id <= seenSignals.current) continue;
       if (mine && s.fromId === mine) {
         seenSignals.current = s.id;
+        sinceRef.current = s.id;
         continue;
       }
       let payload: unknown = s.payload;
@@ -232,10 +260,12 @@ export function CallLayer() {
         payload = JSON.parse(s.payload) as unknown;
       } catch {
         seenSignals.current = s.id;
+        sinceRef.current = s.id;
         continue;
       }
       void media.handle(s.kind, payload);
       seenSignals.current = s.id;
+      sinceRef.current = s.id;
     }
   }, [session.data?.signals, me.data?.userId, rtcReady]);
 

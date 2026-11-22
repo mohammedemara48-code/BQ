@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { optionalSafeImageUrl, optionalSafeMediaUrl } from "@/lib/safe-url";
 import { getSql } from "@/lib/db";
 import { authMiddleware } from "@/lib/auth/middleware";
 import { haversineKm, normalizeSerial, pairIds } from "@/lib/utils";
@@ -95,26 +96,61 @@ export function toProfile(
   };
 }
 
+/** One-shot legacy demo cleanup — never on every request. */
+let demoPurgeDone = false;
 async function purgeDemoPeople() {
+  if (demoPurgeDone) return;
+  demoPurgeDone = true;
+  try {
+    const sql = await getSql();
+    await sql`delete from profiles where is_community = true`;
+    await sql`delete from profiles where user_id like 'bq-%' or user_id like 'c:%'`;
+  } catch {
+    demoPurgeDone = false;
+  }
+}
+
+const PRESENCE_TTL_SEC = 90;
+
+export async function refreshStalePresence() {
   const sql = await getSql();
   await sql`
-    delete from messages
-    where user_a like 'bq-%' or user_b like 'bq-%'
-       or user_a like 'c:%' or user_b like 'c:%'
+    update profiles
+    set online = false
+    where online = true
+      and updated_at < now() - interval '90 seconds'
   `;
+}
+
+async function clearMessageAllow(userId: string, peerId: string) {
+  const sql = await getSql();
   await sql`
-    delete from requests
-    where from_id like 'bq-%' or to_id like 'bq-%'
-       or from_id like 'c:%' or to_id like 'c:%'
+    delete from message_allow
+    where (user_id = ${userId} and peer_id = ${peerId})
+       or (user_id = ${peerId} and peer_id = ${userId})
   `;
-  await sql`delete from calls where peer_id like 'bq-%' or peer_id like 'c:%' or user_id like 'bq-%'`;
-  await sql`delete from notifications where from_id like 'bq-%' or user_id like 'bq-%'`;
-  await sql`delete from photo_access where owner_id like 'bq-%' or viewer_id like 'bq-%'`;
-  await sql`delete from photo_requests where owner_id like 'bq-%' or viewer_id like 'bq-%'`;
-  await sql`delete from blocks where blocker_id like 'bq-%' or blocked_id like 'bq-%'`;
-  await sql`delete from reports where target_id like 'bq-%' or reporter_id like 'bq-%'`;
-  await sql`delete from profiles where is_community = true`;
-  await sql`delete from profiles where user_id like 'bq-%' or user_id like 'c:%'`;
+}
+
+/** True if `me` may send to `peer` under message-request rules. */
+async function assertCanSend(me: string, peerId: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+  if (!peerId || me === peerId) return { ok: false, reason: "invalid" };
+  const blocked = await blockedSet(me);
+  if (blocked.has(peerId)) return { ok: false, reason: "blocked" };
+  const sql = await getSql();
+  const allowed = await sql<{ n: number }>`
+    select count(*)::int as n from message_allow
+    where user_id = ${me} and peer_id = ${peerId}
+  `;
+  if ((allowed[0]?.n ?? 0) > 0) return { ok: true };
+  const [a, b] = pairIds(me, peerId);
+  const inbound = await sql<{ n: number }>`
+    select count(*)::int as n from messages
+    where user_a = ${a} and user_b = ${b} and sender_id = ${peerId}
+  `;
+  // Peer already messaged us and we have not accepted → must accept first.
+  if ((inbound[0]?.n ?? 0) > 0) return { ok: false, reason: "accept_required" };
+  // First contact from us → allowed (creates a message request for them).
+  return { ok: true };
 }
 
 export async function claimOwnerIfOpen(userId: string): Promise<boolean> {
@@ -269,6 +305,7 @@ export const listPeople = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
     await purgeDemoPeople();
+    await refreshStalePresence();
     const sql = await getSql();
     const meRow = await sql<ProfileRow>`
       select * from profiles where user_id = ${context.userId} limit 1
@@ -341,8 +378,8 @@ const profilePatch = z.object({
   city: z.string().max(60).optional(),
   lookingFor: z.string().max(60).optional(),
   interests: z.array(z.string().max(24)).max(12).optional(),
-  photoUrl: z.string().max(350_000).optional(),
-  coverUrl: z.string().max(350_000).optional(),
+  photoUrl: optionalSafeImageUrl,
+  coverUrl: optionalSafeImageUrl,
   latitude: z.number().min(-90).max(90).nullable().optional(),
   longitude: z.number().min(-180).max(180).nullable().optional(),
   role: z.enum(["سالب", "موجب", "تبادل", ""]).optional(),
@@ -502,7 +539,7 @@ const sendInput = z.object({
   peerId: z.string().min(1).max(120),
   text: z.string().max(2000),
   type: z.enum(["text", "image", "video", "file", "voice"]).default("text"),
-  fileUrl: z.string().max(2_000_000).nullable().optional(),
+  fileUrl: optionalSafeMediaUrl,
   viewOnce: z.boolean().optional(),
   durationSec: z.number().int().min(0).max(1800).optional(),
 });
@@ -512,9 +549,9 @@ export const sendMessage = createServerFn({ method: "POST" })
   .validator((d: unknown) => sendInput.parse(d))
   .handler(async ({ context, data }) => {
     const text = data.text.trim();
-    if (!text && !data.fileUrl) return { ok: false as const };
-    const blocked = await blockedSet(context.userId);
-    if (blocked.has(data.peerId)) return { ok: false as const };
+    if (!text && !data.fileUrl) return { ok: false as const, reason: "empty" };
+    const gate = await assertCanSend(context.userId, data.peerId);
+    if (!gate.ok) return { ok: false as const, reason: gate.reason };
     const [a, b] = pairIds(context.userId, data.peerId);
     const sql = await getSql();
     await sql`
@@ -556,12 +593,6 @@ export const openViewOnce = createServerFn({ method: "POST" })
     return { ok: true as const };
   });
 
-export const replyFromPeer = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
-  .validator((d: { peerId: string }) => idInput.parse(d))
-  .handler(async () => {
-    return { ok: false as const, text: "" };
-  });
 
 export const listRequests = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
@@ -802,6 +833,7 @@ export const blockUser = createServerFn({ method: "POST" })
       where (from_id = ${context.userId} and to_id = ${data.userId})
          or (from_id = ${data.userId} and to_id = ${context.userId})
     `;
+    await clearMessageAllow(context.userId, data.userId);
     return { ok: true as const };
   });
 
@@ -817,6 +849,7 @@ export const unfriend = createServerFn({ method: "POST" })
       where (from_id = ${context.userId} and to_id = ${data.userId})
          or (from_id = ${data.userId} and to_id = ${context.userId})
     `;
+    await clearMessageAllow(context.userId, data.userId);
     return { ok: true as const };
   });
 

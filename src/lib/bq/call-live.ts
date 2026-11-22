@@ -3,7 +3,7 @@ import { z } from "zod";
 import { getSql } from "@/lib/db";
 import { authMiddleware } from "@/lib/auth/middleware";
 import { pairIds } from "@/lib/utils";
-import { allowThread, blockedSet, ensureMe, notify } from "./server";
+import { blockedSet, ensureMe, notify } from "./server";
 
 export type LiveCallRow = {
   id: number;
@@ -57,8 +57,7 @@ async function insertCallMessage(
     insert into messages (user_a, user_b, sender_id, type, text, delivered)
     values (${a}, ${b}, ${callerId}, ${"call"}, ${text}, ${true})
   `;
-  await allowThread(callerId, calleeId);
-  await allowThread(calleeId, callerId);
+  // Do NOT grant message_allow here — calls must not bypass message requests.
 }
 
 async function expireStale() {
