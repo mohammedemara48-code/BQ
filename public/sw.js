@@ -15,7 +15,9 @@ self.addEventListener("push", (event) => {
     try {
       const text = event.data && event.data.text && event.data.text();
       if (text) data.body = text;
-    } catch (_) {}
+    } catch (_) {
+    // ignore
+  }
   }
   event.waitUntil(
     (async () => {
@@ -25,7 +27,9 @@ self.addEventListener("push", (event) => {
         try {
           c.postMessage({ type: "bq-push", ...data });
           if (c.focused) focused = true;
-        } catch (_) {}
+        } catch (_) {
+    // ignore
+  }
       }
       if (data.kind === "call" || !focused || clients.length === 0) {
         await self.registration.showNotification(data.title || "BQ", {
@@ -57,7 +61,9 @@ self.addEventListener("notificationclick", (event) => {
           await client.focus();
           try {
             client.postMessage({ type: "bq-open", url });
-          } catch (_) {}
+          } catch (_) {
+    // ignore
+  }
           return;
         }
       }

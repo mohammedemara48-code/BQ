@@ -685,6 +685,14 @@ export const logCall = createServerFn({ method: "POST" })
     return { ok: true as const };
   });
 
+export const heartbeat = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const sql = await getSql();
+    await sql`update profiles set online = true, updated_at = now() where user_id = ${context.userId}`;
+    return { ok: true as const };
+  });
+
 export const signOutPresence = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
